@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 import queue
+from abc import ABC, abstractmethod
 from common.serial_controller import SerialController
 from common.protocol_base import ProtocolBase
 

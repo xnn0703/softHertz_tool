@@ -7,7 +7,6 @@ class KauDC004AUI(UIBase):
     
     def __init__(self, master, device):
         super().__init__(master, device)
-        self.master.title("softHertz串口调试工具")
         # 定义布局配置（考虑设备类型下拉框占用的列）
         self.layout_config = {
             'status_table': {'row': 1, 'column': 0, 'column_span': 7, 'padx': 10, 'pady': 10},
@@ -22,15 +21,31 @@ class KauDC004AUI(UIBase):
             'device_query_btn': {'row': 6, 'column': 1, 'padx': 10, 'pady': 10},
             'clear_btn': {'row': 6, 'column': 2, 'padx': 10, 'pady': 10}
         }
+        # 保存定时器ID
+        self.status_timer = None
         # 重新创建设备特定的UI组件
         self.create_specific_widgets()
         # 定时更新设备状态
-        self.update_device_status_timer()
+        self._schedule_status_update()
     
     def create_widgets(self):
         """重写创建基本UI组件，调用父类方法创建包含设备选择的基本组件"""
         # 调用父类方法创建设备选择和基本串口设置组件
         super().create_widgets()
+        
+    def on_device_type_changed(self, event=None):
+        """处理设备类型变更事件 - 与AFD01_QS_UI保持一致的实现"""
+        new_device_type = self.device_type_cb.get()
+        print(f"[DEBUG] KauDC004AUI: 检测到设备类型变更，新类型: {new_device_type}, 当前类型: {self.current_device_type}")
+        if new_device_type != self.current_device_type:
+            self.current_device_type = new_device_type
+            print(f"[DEBUG] KauDC004AUI: 更新当前设备类型为: {new_device_type}")
+            # 这里应该有一个回调函数来通知应用程序切换设备
+            if hasattr(self, 'device_type_change_callback'):
+                print(f"[DEBUG] KauDC004AUI: 调用回调函数切换设备类型")
+                self.device_type_change_callback(new_device_type)
+            else:
+                print(f"[DEBUG] KauDC004AUI: 没有设置device_type_change_callback")
     
     def create_specific_widgets(self):
         """创建设备特定的UI组件"""
@@ -137,45 +152,129 @@ class KauDC004AUI(UIBase):
     
     def set_txlo(self):
         """设置发射本振"""
+        # 多重防御性检查
+        if not hasattr(self, 'device') or self.device is None:
+            messagebox.showerror("错误", "设备对象不存在")
+            return
+        
+        if not hasattr(self.device, 'serial_controller') or self.device.serial_controller is None:
+            messagebox.showerror("错误", "串口控制器不存在")
+            # 强制更新UI状态
+            if hasattr(self, 'connect_btn'):
+                self.connect_btn.config(text="打开串口")
+            return
+        
         if not self.device.is_connected():
             messagebox.showwarning("未连接", "请先打开串口")
+            # 确保UI状态一致
+            if hasattr(self, 'connect_btn'):
+                self.connect_btn.config(text="打开串口")
             return        
-        success, msg = self.device.send_command("设置发射本振", self.txlo_cb.get())
-        if success:
-            self.log_message(msg)
-        else:
-            messagebox.showerror("发送错误", msg)
+        
+        try:
+            # 额外检查防止UI组件被销毁
+            if hasattr(self, 'txlo_cb') and self.txlo_cb.winfo_exists():
+                success, msg = self.device.send_command("设置发射本振", self.txlo_cb.get())
+                if success:
+                    self.log_message(msg)
+                else:
+                    messagebox.showerror("发送错误", msg)
+                    # 如果是NoneType错误，强制更新UI状态
+                    if "'NoneType' object has no attribute" in str(msg) and hasattr(self, 'connect_btn'):
+                        self.connect_btn.config(text="打开串口")
+        except Exception as e:
+            error_msg = f"发送命令时发生错误: {str(e)}"
+            messagebox.showerror("错误", error_msg)
+            # 强制更新UI状态
+            if hasattr(self, 'connect_btn'):
+                self.connect_btn.config(text="打开串口")
     
     def set_rxlo(self):
         """设置接收本振"""
+        # 多重防御性检查
+        if not hasattr(self, 'device') or self.device is None:
+            messagebox.showerror("错误", "设备对象不存在")
+            return
+        
+        if not hasattr(self.device, 'serial_controller') or self.device.serial_controller is None:
+            messagebox.showerror("错误", "串口控制器不存在")
+            # 强制更新UI状态
+            if hasattr(self, 'connect_btn'):
+                self.connect_btn.config(text="打开串口")
+            return
+        
         if not self.device.is_connected():
             messagebox.showwarning("未连接", "请先打开串口")
+            # 确保UI状态一致
+            if hasattr(self, 'connect_btn'):
+                self.connect_btn.config(text="打开串口")
             return        
-        success, msg = self.device.send_command("设置接收本振", self.rxlo_cb.get())
-        if success:
-            self.log_message(msg)
-        else:
-            messagebox.showerror("发送错误", msg)
+        
+        try:
+            # 额外检查防止UI组件被销毁
+            if hasattr(self, 'rxlo_cb') and self.rxlo_cb.winfo_exists():
+                success, msg = self.device.send_command("设置接收本振", self.rxlo_cb.get())
+                if success:
+                    self.log_message(msg)
+                else:
+                    messagebox.showerror("发送错误", msg)
+                    # 如果是NoneType错误，强制更新UI状态
+                    if "'NoneType' object has no attribute" in str(msg) and hasattr(self, 'connect_btn'):
+                        self.connect_btn.config(text="打开串口")
+        except Exception as e:
+            error_msg = f"发送命令时发生错误: {str(e)}"
+            messagebox.showerror("错误", error_msg)
+            # 强制更新UI状态
+            if hasattr(self, 'connect_btn'):
+                self.connect_btn.config(text="打开串口")
     
     def send_command(self):
         """发送命令"""
-        if not self.device.is_connected():
-            messagebox.showwarning("未连接", "请先打开串口")
+        # 多重防御性检查
+        if not hasattr(self, 'device') or self.device is None:
+            messagebox.showerror("错误", "设备对象不存在")
             return
         
-        cmd = self.cmd_cb.get()
-        param = None
-        if cmd in ("发射衰减设置", "接收衰减设置"):
-            param = self.param_entry.get().strip()
-            if not param:
-                messagebox.showwarning("参数为空", "请输入参数值")
-                return
+        if not hasattr(self.device, 'serial_controller') or self.device.serial_controller is None:
+            messagebox.showerror("错误", "串口控制器不存在")
+            # 强制更新UI状态
+            if hasattr(self, 'connect_btn'):
+                self.connect_btn.config(text="打开串口")
+            return
         
-        success, msg = self.device.send_command(cmd, param)
-        if success:
-            self.log_message(msg)
-        else:
-            messagebox.showerror("发送错误", msg)
+        if not self.device.is_connected():
+            messagebox.showwarning("未连接", "请先打开串口")
+            # 确保UI状态一致
+            if hasattr(self, 'connect_btn'):
+                self.connect_btn.config(text="打开串口")
+            return
+        
+        try:
+            # 额外检查防止UI组件被销毁
+            if hasattr(self, 'cmd_cb') and self.cmd_cb.winfo_exists():
+                cmd = self.cmd_cb.get()
+                param = None
+                if cmd in ("发射衰减设置", "接收衰减设置"):
+                    if hasattr(self, 'param_entry') and self.param_entry.winfo_exists():
+                        param = self.param_entry.get().strip()
+                        if not param:
+                            messagebox.showwarning("参数为空", "请输入参数值")
+                            return
+                
+                success, msg = self.device.send_command(cmd, param)
+                if success:
+                    self.log_message(msg)
+                else:
+                    messagebox.showerror("发送错误", msg)
+                    # 如果是NoneType错误，强制更新UI状态
+                    if "'NoneType' object has no attribute" in str(msg) and hasattr(self, 'connect_btn'):
+                        self.connect_btn.config(text="打开串口")
+        except Exception as e:
+            error_msg = f"发送命令时发生错误: {str(e)}"
+            messagebox.showerror("错误", error_msg)
+            # 强制更新UI状态
+            if hasattr(self, 'connect_btn'):
+                self.connect_btn.config(text="打开串口")
     
     def query_device(self):
         """查询设备信息"""
@@ -198,28 +297,71 @@ class KauDC004AUI(UIBase):
         # 记录日志
         self.log_message("已清除所有数据和缓存")
     
+    def destroy(self):
+        """清理资源，停止定时器"""
+        print("[DEBUG] KauDC004AUI: 清理资源，停止定时器")
+        # 调用父类的destroy方法
+        super().destroy()
+        # 停止状态更新定时器
+        if self.status_timer:
+            self.master.after_cancel(self.status_timer)
+            self.status_timer = None
+    
+    def _schedule_status_update(self):
+        """安排下一次状态更新"""
+        if self.status_timer is not None:
+            self.master.after_cancel(self.status_timer)
+        self.status_timer = self.master.after(500, self.update_device_status_timer)
+    
     def update_device_status_timer(self):
         """定时更新设备状态"""
-        if self.device.is_connected():
-            device_info = self.device.device_info
-            # 更新状态表格
-            self.status_table.item(self.status_table.get_children()[0], 
-                                  values=("版本", f"{device_info['version']}"))
-            self.status_table.item(self.status_table.get_children()[1], 
-                                  values=("温度", f"{device_info['temperature']}°C"))
-            self.status_table.item(self.status_table.get_children()[2], 
-                                  values=("TxLO", f"{device_info['txlo']} MHz"))
-            self.status_table.item(self.status_table.get_children()[3], 
-                                  values=("RxLO", f"{device_info['rxlo']} MHz"))
-            self.status_table.item(self.status_table.get_children()[4], 
-                                  values=("Tx衰减", f"{device_info['tx_attenuation']:.1f} dB"))
-            self.status_table.item(self.status_table.get_children()[5], 
-                                  values=("Rx衰减", f"{device_info['rx_attenuation']:.1f} dB"))
-            self.status_table.item(self.status_table.get_children()[6], 
-                                  values=("锁定状态", device_info['lock_status']))
+        # 安全检查：确保status_table仍然存在
+        if hasattr(self, 'status_table') and self.status_table.winfo_exists():
+            if self.device.is_connected():
+                device_info = self.device.device_info
+                # 检查status_table是否有子项
+                children = self.status_table.get_children()
+                if children:
+                    try:
+                        # 更新状态表格，添加异常处理
+                        if len(children) > 0: self.status_table.item(children[0], values=("版本", f"{device_info['version']}"))
+                        if len(children) > 1: self.status_table.item(children[1], values=("温度", f"{device_info['temperature']}°C"))
+                        if len(children) > 2: self.status_table.item(children[2], values=("TxLO", f"{device_info['txlo']} MHz"))
+                        if len(children) > 3: self.status_table.item(children[3], values=("RxLO", f"{device_info['rxlo']} MHz"))
+                        
+                        # 安全格式化Tx衰减值
+                        tx_attenuation = device_info.get('tx_attenuation', 'N/A')
+                        try:
+                            tx_attenuation = float(tx_attenuation)
+                            tx_attenuation_str = f"{tx_attenuation:.1f} dB"
+                        except (ValueError, TypeError):
+                            tx_attenuation_str = f"{tx_attenuation} dB"
+                            
+                        # 安全格式化Rx衰减值
+                        rx_attenuation = device_info.get('rx_attenuation', 'N/A')
+                        try:
+                            rx_attenuation = float(rx_attenuation)
+                            rx_attenuation_str = f"{rx_attenuation:.1f} dB"
+                        except (ValueError, TypeError):
+                            rx_attenuation_str = f"{rx_attenuation} dB"
+                            
+                        if len(children) > 4: self.status_table.item(children[4], values=("Tx衰减", tx_attenuation_str))
+                        if len(children) > 5: self.status_table.item(children[5], values=("Rx衰减", rx_attenuation_str))
+                        if len(children) > 6: self.status_table.item(children[6], values=("锁定状态", device_info.get('lock_status', '未知')))
+                    except Exception as e:
+                        print(f"[DEBUG] KauDC004AUI: 更新设备状态时出错: {e}")
         
-        # 继续定时更新
-        self.master.after(500, self.update_device_status_timer)
+        # 安排下一次更新
+        self._schedule_status_update()
+    
+    def on_device_type_changed(self, event=None):
+        """处理设备类型变更事件 - 与AFD01_QS_UI保持一致的实现"""
+        new_device_type = self.device_type_cb.get()
+        if new_device_type != self.current_device_type:
+            self.current_device_type = new_device_type
+            # 这里应该有一个回调函数来通知应用程序切换设备
+            if hasattr(self, 'device_type_change_callback'):
+                self.device_type_change_callback(new_device_type)
     
     def log_message(self, msg):
         """在日志区域显示消息"""

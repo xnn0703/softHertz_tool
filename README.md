@@ -121,6 +121,38 @@ python app.py
 - Python 3.x
 - tkinter (Python标准库)
 - pyserial
+- PyInstaller (用于打包成可执行文件)
+
+## 打包方法
+
+项目提供了一个`build_exe.py`脚本，用于将Python代码打包成Windows可执行文件(.exe)。
+
+### 打包步骤
+
+1. 首先确保已安装所有依赖项，包括PyInstaller：
+   ```bash
+   pip install pyserial pyinstaller
+   ```
+
+2. 进入项目根目录(`softHertz_upper`文件夹)
+
+3. 运行打包脚本：
+   ```bash
+   python build_exe.py
+   ```
+
+4. 打包完成后，可执行文件将位于`dist`目录下：
+   ```
+   dist/softHertz调试工具.exe
+   ```
+
+### 打包脚本说明
+
+`build_exe.py`脚本会执行以下操作：
+- 清理旧的构建文件(`build`、`dist`目录和`.spec`文件)
+- 使用PyInstaller将项目打包成单个可执行文件
+- 包含应用图标和必要的资源文件
+- 创建无控制台窗口的GUI应用程序
 
 ## 注意事项
 - 使用前请确保已安装所需的依赖项

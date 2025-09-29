@@ -482,8 +482,13 @@ class AFD01_QS_UI(UIBase):
     def on_device_type_changed(self, event=None):
         """处理设备类型变更事件"""
         new_device_type = self.device_type_cb.get()
+        print(f"[DEBUG] AFD01_QS_UI: 检测到设备类型变更，新类型: {new_device_type}, 当前类型: {self.current_device_type}")
         if new_device_type != self.current_device_type:
             self.current_device_type = new_device_type
+            print(f"[DEBUG] AFD01_QS_UI: 更新当前设备类型为: {new_device_type}")
             # 这里应该有一个回调函数来通知应用程序切换设备
             if hasattr(self, 'device_type_change_callback'):
+                print(f"[DEBUG] AFD01_QS_UI: 调用回调函数切换设备类型")
                 self.device_type_change_callback(new_device_type)
+            else:
+                print(f"[DEBUG] AFD01_QS_UI: 没有设置device_type_change_callback")

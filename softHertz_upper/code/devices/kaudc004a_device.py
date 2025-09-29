@@ -79,10 +79,22 @@ class KauDC004ADevice(DeviceBase):
     
     def send_command(self, command_name: str, params=None) -> bool:
         """发送命令到设备"""
-        if not self.serial_controller.is_connected():
-            return False, "设备未连接"
+        # 多重防御性检查，确保serial_controller存在且连接状态一致
+        if not hasattr(self, 'serial_controller') or self.serial_controller is None:
+            return False, "串口控制器不存在"
+        
+        # 即使is_connected返回True，也要再次检查serial_controller.ser是否存在
+        if not self.serial_controller.is_connected() or (hasattr(self.serial_controller, 'ser') and self.serial_controller.ser is None):
+            # 强制同步状态
+            if hasattr(self.serial_controller, 'ser'):
+                self.serial_controller.ser = None
+            return False, "串口未连接或连接已断开"
         
         try:
+            # 构建命令帧前再检查一次连接状态，防止竞态条件
+            if not self.serial_controller.is_connected() or (hasattr(self.serial_controller, 'ser') and self.serial_controller.ser is None):
+                return False, "串口连接状态已变化"
+            
             payload = b''
             
             if command_name == "复位设备":
@@ -130,10 +142,19 @@ class KauDC004ADevice(DeviceBase):
             
             # 构建并发送帧
             frame = self.protocol.build_frame(payload)
+            
+            # 发送命令前最后一次检查连接状态
+            if not self.serial_controller.is_connected() or (hasattr(self.serial_controller, 'ser') and self.serial_controller.ser is None):
+                return False, "串口连接状态已变化"
+            
             success, msg = self.serial_controller.send_data(frame)
             return success, msg
         except Exception as e:
-            return False, f"发送命令时发生错误: {str(e)}"
+            error_msg = f"发送命令时发生错误: {str(e)}"
+            # 发生NoneType错误时，强制同步状态
+            if "'NoneType' object has no attribute" in str(e) and hasattr(self.serial_controller, 'ser'):
+                self.serial_controller.ser = None
+            return False, error_msg
     
     def query_device_info(self) -> dict:
         """查询设备信息"""
@@ -154,42 +175,78 @@ class KauDC004ADevice(DeviceBase):
             (0x16, b'\x16\x00\x00\x00\x00\x00', "衰减查询")
         ]
         
+        # 防御性检查，确保serial_controller存在
+        if not hasattr(self, 'serial_controller') or self.serial_controller is None:
+            return
+        
+        # 安全的日志记录函数
+        def safe_log(msg):
+            if hasattr(self.serial_controller, 'log'):
+                try:
+                    self.serial_controller.log(msg)
+                except Exception as e:
+                    try:
+                        print(f"[日志错误] {msg}, 原错误: {str(e)}")
+                    except:
+                        pass
+        
         for attempt in range(3):
-            self.serial_controller.log(f"尝试查询设备，第 {attempt+1} 次...")
+            safe_log(f"尝试查询设备，第 {attempt+1} 次...")
             all_ok = True
             
             for cmd_byte, payload, name in queries:
-                self.serial_controller.log(f"查询: {name}")
-                frame = self.protocol.build_frame(payload)
-                self.serial_controller.send_data(frame)
-                self.serial_controller.log(f">>> 发送查询指令: {payload.hex().upper()}")
+                safe_log(f"查询: {name}")
+                
+                # 检查protocol对象是否存在
+                if not hasattr(self, 'protocol') or self.protocol is None:
+                    safe_log("错误: protocol对象不存在")
+                    all_ok = False
+                    continue
+                
+                try:
+                    frame = self.protocol.build_frame(payload)
+                    
+                    # 再次检查serial_controller
+                    if hasattr(self.serial_controller, 'send_data'):
+                        self.serial_controller.send_data(frame)
+                    safe_log(f">>> 发送查询指令: {payload.hex().upper()}")
+                except Exception as e:
+                    safe_log(f"发送查询指令时出错: {str(e)}")
+                    all_ok = False
+                    continue
                 
                 # 清空旧回复
-                while not self.response_queue.empty():
-                    try:
-                        self.response_queue.get_nowait()
-                    except queue.Empty:
-                        break
+                try:
+                    while not self.response_queue.empty():
+                        try:
+                            self.response_queue.get_nowait()
+                        except queue.Empty:
+                            break
+                except:
+                    pass
                 
                 try:
                     # 等待响应
                     got_cmd, parsed = self.response_queue.get(timeout=2)
                     if got_cmd == cmd_byte:
-                        self.serial_controller.log(f"{name} 查询成功，回复正常")
+                        safe_log(f"{name} 查询成功，回复正常")
                     else:
                         all_ok = False
-                        self.serial_controller.log(f"{name} 收到错帧: 0x{got_cmd:02X}")
+                        safe_log(f"{name} 收到错帧: 0x{got_cmd:02X}")
                 except queue.Empty:
                     all_ok = False
-                    self.serial_controller.log(f"{name} 查询超时无响应")
+                    safe_log(f"{name} 查询超时无响应")
+                except Exception as e:
+                    all_ok = False
+                    safe_log(f"等待响应时出错: {str(e)}")
             
             if all_ok:
-                self.serial_controller.log("✅ 设备查询完成，全部成功！")
+                safe_log("✅ 设备查询完成，全部成功！")
                 break
             else:
-                self.serial_controller.log("❌ 本轮查询有失败，重试...")
+                safe_log("❌ 本轮查询有失败，重试...")
         else:
-            self.serial_controller.log("❌ 所有查询尝试失败！请检查设备连接或协议配置。")
+            safe_log("❌ 所有查询尝试失败！请检查设备连接或协议配置。")
     
     def get_supported_commands(self) -> list:
         """获取设备支持的命令列表"""

@@ -2,10 +2,10 @@
 
 
 a = Analysis(
-    ['code\\app.py'],
+    ['D:\\1-project_upper\\1.softHertz_upper\\softHertz_upper\\code\\app.py'],
     pathex=[],
     binaries=[],
-    datas=[('code\\soft_hertz_logo_deepspace_blue_512.png', '.')],
+    datas=[('D:\\1-project_upper\\1.softHertz_upper\\softHertz_upper\\code\\soft_hertz_logo_deepspace_blue_512.png', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,5 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['code\\soft_hertz_logo_deepspace_blue_512.ico'],
+    icon=['D:\\1-project_upper\\1.softHertz_upper\\softHertz_upper\\code\\soft_hertz_logo_deepspace_blue_512.ico'],
 )
