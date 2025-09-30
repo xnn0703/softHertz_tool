@@ -87,7 +87,7 @@ class AFD01_QS_Device(DeviceBase):
                 continue
             
             # 4. 计算完整帧长度：帧头(1)+命令(1)+长度(2)+数据(N)+CRC(2)
-            total_frame_length = 5 + data_length  # 5 = 1(帧头) + 1(命令) + 2(长度) + 2(CRC)
+            total_frame_length = 6 + data_length  # 6 = 1(帧头) + 1(命令) + 2(长度) + 2(CRC)
             
             # 5. 检查是否有完整的帧数据
             if len(self.buffer) < total_frame_length:

@@ -85,18 +85,25 @@ class AFD01_QSProtocol(ProtocolBase):
             # 提取数据部分
             data = frame[4:4+data_length]
 
-            # 确保有足够的数据解析校验和
+            # 计算校验和位置
             crc_start = 4 + data_length
-            crc_end = 5 + data_length
+            crc_end = 6 + data_length  # 2字节校验和，所以应该是crc_start+2
+            
+            # 确保有足够的数据解析校验和
             if len(frame) < crc_end:
-                print(f"[DEBUG] 帧长度不足，无法解析校验和: {frame.hex().upper()}")
-                return None, "帧长度不足，无法解析校验和"
+                print(f"[DEBUG] 帧长度不足，无法解析校验和: 当前{len(frame)}字节, 需要{crc_end}字节, 帧数据: {frame.hex().upper()}")
+                return None, f"帧长度不足，无法解析校验和: 当前{len(frame)}字节, 需要{crc_end}字节"
                 
             # 尝试提取校验和（2字节，高字节先）
+            crc_bytes = frame[crc_start:crc_end]
+            if len(crc_bytes) != 2:
+                print(f"[DEBUG] 校验和字节不足: 预期2字节, 实际{len(crc_bytes)}字节, 帧数据: {frame.hex().upper()}")
+                return None, f"校验和字节不足: 预期2字节, 实际{len(crc_bytes)}字节"
+                
             try:
-                received_checksum = struct.unpack('>H', frame[crc_start:crc_end])[0]
+                received_checksum = struct.unpack('>H', crc_bytes)[0]
             except struct.error as se:
-                print(f"[DEBUG] 解析校验和失败: {frame.hex().upper()}, 错误: {str(se)}")
+                print(f"[DEBUG] 解析校验和失败: {crc_bytes.hex().upper()}, 错误: {str(se)}")
                 return None, f"解析校验和失败: {str(se)}"
 
             # 计算校验和：指令(1字节) + 数据长度(2字节) + 数据内容
