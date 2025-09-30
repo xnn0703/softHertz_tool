@@ -93,12 +93,17 @@ class Application:
         if self.serial_controller:
             print(f"[DEBUG] 强制断开当前串口连接")
             self.serial_controller.close()  # 强制调用close方法，确保串口资源释放
-            # 额外添加短暂延迟，确保串口端口完全释放
+            # 强制调用close方法，确保串口资源释放
             import time
             time.sleep(0.2)
             print(f"[DEBUG] 串口已关闭，等待资源释放完成")
         else:
             print(f"[DEBUG] 串口控制器不存在")
+        
+        # 更新串口控制器的设备类型
+        if self.serial_controller:
+            self.serial_controller.current_device_type = device_type
+            print(f"[DEBUG] 串口控制器设备类型已更新为: {device_type}")
             
         # 清除当前UI容器内的组件
         if self.ui:

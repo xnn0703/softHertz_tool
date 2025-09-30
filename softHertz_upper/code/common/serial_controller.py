@@ -13,6 +13,8 @@ class SerialController:
         self.response_queue = queue.Queue()
         self.received_data_callback = None
         self.receive_thread = None
+        # 存储当前设备类型，默认为KauDC004A
+        self.current_device_type = "KauDC004A"
         
     def update_ports(self):
         """获取当前可用的串口列表"""
@@ -115,17 +117,45 @@ class SerialController:
             return False, error_msg
     
     def read_thread(self):
-        """接收数据的线程函数"""
+        """接收数据的线程函数，改进的数据接收逻辑"""
         buffer = bytearray()
         while self.running:
             try:
                 if self.ser and self.ser.is_open:
-                    chunk = self.ser.read(1)
+                    # 一次读取更多数据，而不是单字节读取
+                    chunk = self.ser.read(1024)  # 增加读取缓冲区大小
                     if chunk:
                         buffer.extend(chunk)
+                        # 实时记录接收到的数据
+                        line = f"<<< 原始接收: {chunk.hex().upper()}"
+                        self.log(line)
+                        # print(line)
+                        # 检查是否有足够的数据来处理
                         if self.received_data_callback:
-                            self.received_data_callback(buffer)
-                time.sleep(0.001)  # 防止CPU占用过高
+                            # 根据当前设备类型动态选择帧头检测策略
+                            trigger_callback = False
+                            print(f"[DEBUG] 当前设备类型: {self.current_device_type}")
+                            if self.current_device_type == "KauDC004A":
+                                # KauDC004A设备使用双字节帧头0xAA 0x55
+                                trigger_callback = len(buffer) >= 2 and buffer[-2:] == b'\xAA\x55'
+                            elif self.current_device_type == "AFD01_QS":
+                                print(f"[DEBUG] 缓冲区数据: {buffer.hex().upper()}")
+                                # AFD01_QS设备使用单字节帧头0x55
+                                trigger_callback = len(buffer) >= 1 and buffer[-1:] == b'\x55'
+                            
+                            # 安全机制：当缓冲区足够大时也触发回调，防止数据堆积
+                            trigger_callback = trigger_callback or len(buffer) >= 64
+                            
+                            if trigger_callback:
+                                print(f"[DEBUG] 触发回调函数，缓冲区长度: {len(buffer)}")
+                                try:
+                                    # 创建buffer的副本传递给回调，避免回调中的操作影响当前buffer
+                                    self.received_data_callback(bytearray(buffer))
+                                    print(f"[DEBUG] 回调函数执行完成")
+                                except Exception as e:
+                                    print(f"[DEBUG] 回调函数执行异常: {str(e)}")
+                                    self.log(f"[回调错误] {str(e)}")
+                time.sleep(0.005)  # 稍微增加睡眠时间，减少CPU占用
             except Exception as e:
                 err = f"[接收错误] {e}"
                 self.log(err)

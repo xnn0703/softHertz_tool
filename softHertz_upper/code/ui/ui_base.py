@@ -12,56 +12,12 @@ class UIBase:
         self.device = device
         # 初始化设备类型，默认为KauDC004A
         self.current_device_type = "KauDC004A"
-        self.create_widgets()
-        self.setup_callbacks()
-        
-    def set_device_type(self, device_type):
-        """设置设备类型"""
-        print(f"[DEBUG] UIBase: 设置设备类型为: {device_type}")
-        self.current_device_type = device_type
-        if hasattr(self, 'device_type_cb'):
-            self.device_type_cb.set(device_type)
-        
-    def create_widgets(self):
-        """创建UI组件"""
-        # 设备类型选择区域
-        self.device_type_label = ttk.Label(self.master, text="设备类型:")
-        self.device_type_label.grid(row=0, column=0, padx=5, pady=5)
-        self.device_type_cb = ttk.Combobox(self.master, values=["KauDC004A", "AFD01_QS"], width=12)
-        self.device_type_cb.grid(row=0, column=1, padx=5, pady=5)
-        self.device_type_cb.set("KauDC004A")
-        self.device_type_cb.bind("<<ComboboxSelected>>", self.on_device_type_changed)
-        
-        # 串口设置区域
-        self.port_label = ttk.Label(self.master, text="串口:")
-        self.port_label.grid(row=0, column=2, padx=5, pady=5)
-        self.port_cb = ttk.Combobox(self.master, width=10)
-        self.port_cb.grid(row=0, column=3, padx=5, pady=5)
-        
-        self.baud_label = ttk.Label(self.master, text="波特率:")
-        self.baud_label.grid(row=0, column=4, padx=5, pady=5)
-        self.baud_cb = ttk.Combobox(self.master, values=["9600", "19200", "38400", "115200", "921600"], width=10)
-        self.baud_cb.grid(row=0, column=5, padx=5, pady=5)
-        self.baud_cb.set("115200")
-        
-        self.connect_btn = ttk.Button(self.master, text="打开串口", command=self.toggle_serial)
-        self.connect_btn.grid(row=0, column=6, padx=5, pady=5)
-    
-    def setup_callbacks(self):
-        """设置回调函数"""
-        # 定时器每1秒刷新一次串口列表
-        self.master.after(1000, self.update_ports)
-    
-    def __init__(self, master, device):
-        self.master = master
-        self.device = device
-        # 初始化设备类型，默认为KauDC004A
-        self.current_device_type = "KauDC004A"
         # 保存定时器ID
         self.update_ports_timer = None
+        self.ui_update_timer = None
         self.create_widgets()
         self.setup_callbacks()
-    
+        
     def set_device_type(self, device_type):
         """设置设备类型"""
         print(f"[DEBUG] UIBase: 设置设备类型为: {device_type}")
@@ -76,6 +32,10 @@ class UIBase:
         if self.update_ports_timer:
             self.master.after_cancel(self.update_ports_timer)
             self.update_ports_timer = None
+        # 停止UI更新定时器
+        if self.ui_update_timer:
+            self.master.after_cancel(self.ui_update_timer)
+            self.ui_update_timer = None
     
     def create_widgets(self):
         """创建UI组件"""
@@ -106,12 +66,20 @@ class UIBase:
         """设置回调函数"""
         # 定时器每1秒刷新一次串口列表
         self._schedule_update_ports()
+        # 定时器每100毫秒刷新一次UI
+        self._schedule_update_ui()
     
     def _schedule_update_ports(self):
         """安排下一次串口更新"""
         if self.update_ports_timer is not None:
             self.master.after_cancel(self.update_ports_timer)
         self.update_ports_timer = self.master.after(1000, self.update_ports)
+    
+    def _schedule_update_ui(self):
+        """安排下一次UI更新"""
+        if self.ui_update_timer is not None:
+            self.master.after_cancel(self.ui_update_timer)
+        self.ui_update_timer = self.master.after(100, self.update_ui)
     
     def update_ports(self):
         """更新可用串口列表"""
@@ -168,6 +136,16 @@ class UIBase:
     
     def clear_log(self):
         """清除日志方法（由于已移除UI组件，此方法为空实现）"""
+        pass
+    
+    def update_ui(self):
+        """更新UI显示（子类需要重写此方法）
+        
+        基类方法负责安排下一次UI更新，子类应该先调用super().update_ui()，
+        然后再添加自己的UI更新逻辑。
+        """
+        # 继续安排下一次UI更新
+        self._schedule_update_ui()
         pass
     
     def run(self):

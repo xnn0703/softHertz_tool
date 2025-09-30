@@ -1,5 +1,6 @@
 import struct
 from common.protocol_base import ProtocolBase
+import struct
 
 class AFD01_QSProtocol(ProtocolBase):
     """AFD01_QS设备的协议实现类"""
@@ -45,27 +46,61 @@ class AFD01_QSProtocol(ProtocolBase):
     def parse_response(self, frame):
         """解析响应帧"""
         try:
-            # 检查帧头
-            if len(frame) < 8 or frame[0] != self.FRAME_HEADER:
-                return None, "无效的帧头"
+            # 检查帧是否为空或类型错误
+            if not frame or not isinstance(frame, bytes):
+                print(f"[DEBUG] 无效的帧数据")
+                return None, "无效的帧数据"
+                
+            # 检查帧头和最小长度（至少需要包含帧头+命令+长度+CRC = 6字节）
+            if len(frame) < 6 or frame[0] != self.FRAME_HEADER:
+                print(f"[DEBUG] 无效的帧头或长度不足: {frame.hex().upper()}")
+                return None, "无效的帧头或长度不足"
             
-            # 提取命令类型和数据长度（2字节，高字节先）
+            # 提取命令类型
             command = frame[1]
-            data_length = struct.unpack('>H', frame[2:4])[0]
             
-            # 检查帧长度
+            # 确保有足够的数据解析长度字段（至少需要frame[2:4]存在）
+            if len(frame) < 4:
+                print(f"[DEBUG] 帧长度不足，无法解析数据长度: {frame.hex().upper()}")
+                return None, "帧长度不足，无法解析数据长度"
+                
+            # 尝试提取数据长度（2字节，高字节先）
+            try:
+                data_length = struct.unpack('>H', frame[2:4])[0]
+            except struct.error as se:
+                print(f"[DEBUG] 解析数据长度失败: {frame.hex().upper()}, 错误: {str(se)}")
+                return None, f"解析数据长度失败: {str(se)}"
+            
+            # 数据长度合理性检查
+            if data_length > 1024 or data_length < 0:
+                print(f"[DEBUG] 数据长度不合理: {data_length}, 帧数据: {frame.hex().upper()}")
+                return None, f"数据长度不合理: {data_length}"
+            
+            # 计算并检查完整帧长度
             total_frame_length = 5 + data_length  # 帧头(1)+命令(1)+长度(2)+数据(N)+CRC(2)
             if len(frame) < total_frame_length:
-                return None, "帧长度不足"
+                print(f"[DEBUG] 帧长度不足: 当前{len(frame)}字节, 需要{total_frame_length}字节, 帧数据: {frame.hex().upper()}")
+                return None, f"帧长度不足: 当前{len(frame)}字节, 需要{total_frame_length}字节"
 
             # 提取数据部分
             data = frame[4:4+data_length]
 
-            # 提取并计算校验和（2字节，高字节先）
-            received_checksum = struct.unpack('>H', frame[4+data_length:5+data_length])[0]
+            # 确保有足够的数据解析校验和
+            crc_start = 4 + data_length
+            crc_end = 5 + data_length
+            if len(frame) < crc_end:
+                print(f"[DEBUG] 帧长度不足，无法解析校验和: {frame.hex().upper()}")
+                return None, "帧长度不足，无法解析校验和"
+                
+            # 尝试提取校验和（2字节，高字节先）
+            try:
+                received_checksum = struct.unpack('>H', frame[crc_start:crc_end])[0]
+            except struct.error as se:
+                print(f"[DEBUG] 解析校验和失败: {frame.hex().upper()}, 错误: {str(se)}")
+                return None, f"解析校验和失败: {str(se)}"
 
             # 计算校验和：指令(1字节) + 数据长度(2字节) + 数据内容
-            checksum_data = frame[1:4+data_length]
+            checksum_data = frame[1:crc_start]  # 从命令字节到数据内容末尾
             calculated_checksum = 0
             for byte in checksum_data:
                 calculated_checksum += byte
@@ -74,10 +109,12 @@ class AFD01_QSProtocol(ProtocolBase):
 
             # 检查校验和
             if received_checksum != calculated_checksum:
+                print(f"[DEBUG] 校验和失败: 帧数据: {frame.hex().upper()}")
                 return None, f"校验和失败，期望: {calculated_checksum:#04x}, 实际: {received_checksum:#04x}"
 
             return (command, data), "解析成功"
         except Exception as e:
+            print(f"[DEBUG] 解析失败: {frame.hex().upper()}")
             return None, f"解析失败: {str(e)}"
     
     def extract_data(self, command, data):
@@ -112,67 +149,81 @@ class AFD01_QSProtocol(ProtocolBase):
                     })
                     
             elif command == self.CMD_ANTENNA_STATUS_REPORT:
-                # 解析天线状态上报帧（根据协议规范，数据长度为46字节）
-                if len(data) == 46:
-                    # 字节5: GPS锁定状态
-                    gps_lock_status = "已锁定" if data[4] == 0x01 else "未锁定"
+                print(f"天线状态上报数据长度: {len(data)}")
+                # 解析天线状态上报帧（根据协议规范，数据长度为42字节）
+                # 为了兼容性，当数据长度大于等于42字节时也尝试解析
+                if len(data) >= 42:
+                    print(f"天线状态上报数据内容: {data.hex()}")
+                    # 字节0: GPS锁定状态 (协议表格第5列)
+                    gps_lock_status = "已锁定" if data[0] == 0x01 else "未锁定"
                     
-                    # 字节6-9: GPS经度（4字节float，大端序）
-                    gps_lng = struct.unpack('>f', data[5:9])[0]
+                    # 字节1-2: GPS经度（2字节整数，范围[-180°~180°] * 100，东经为正）(协议表格第6-7列)
+                    gps_lng_raw = struct.unpack('>h', data[1:3])[0]
+                    gps_lng = gps_lng_raw / 100.0
                     
-                    # 字节10-13: GPS纬度（4字节float，大端序）
-                    gps_lat = struct.unpack('>f', data[9:13])[0]
+                    # 字节3-4: GPS纬度（2字节整数，范围[-90°~90°] * 100，北纬为正）(协议表格第8-9列)
+                    gps_lat_raw = struct.unpack('>h', data[3:5])[0]
+                    gps_lat = gps_lat_raw / 100.0
                     
-                    # 字节14-17: GPS高度（4字节float，大端序）
-                    gps_alt = struct.unpack('>f', data[13:17])[0]
+                    # 字节5-6: GPS高度（2字节整数，单位为米）(协议表格第10-11列)
+                    gps_alt = struct.unpack('>h', data[5:7])[0]
                     
-                    # 字节18-21: 接收频率（4字节float，大端序）
-                    rx_freq = struct.unpack('>f', data[17:21])[0]
+                    # 字节7-10: 接收频点（4字节float，大端序，单位为MHz）(协议表格第12-15列)
+                    # 注意：根据用户提供的数据和协议，这里需要重新排列字节顺序
+                    rx_freq_bytes = bytes([data[10], data[9], data[8], data[7]])
+                    rx_freq = struct.unpack('<f', rx_freq_bytes)[0]
                     
-                    # 字节22-25: 发射频率（4字节float，大端序）
-                    tx_freq = struct.unpack('>f', data[21:25])[0]
+                    # 字节11-14: 发射频点（4字节float，大端序，单位为MHz）(协议表格第16-19列)
+                    tx_freq_bytes = bytes([data[14], data[13], data[12], data[11]])
+                    tx_freq = struct.unpack('<f', tx_freq_bytes)[0]
                     
-                    # 字节26-29: 接收本振（4字节float，大端序）
-                    rx_lo = struct.unpack('>f', data[25:29])[0]
+                    # 字节15-18: 接收本振（4字节float，大端序，单位为MHz）(协议表格第20-23列)
+                    rx_lo_bytes = bytes([data[18], data[17], data[16], data[15]])
+                    rx_lo = struct.unpack('<f', rx_lo_bytes)[0]
                     
-                    # 字节30-33: 发射本振（4字节float，大端序）
-                    tx_lo = struct.unpack('>f', data[29:33])[0]
+                    # 字节19-22: 发射本振（4字节float，大端序，单位为MHz）(协议表格第24-27列)
+                    tx_lo_bytes = bytes([data[22], data[21], data[20], data[19]])
+                    tx_lo = struct.unpack('<f', tx_lo_bytes)[0]
                     
-                    # 字节34: 发射状态
-                    tx_enable = "开启" if data[33] == 0x01 else "关闭"
+                    # 字节23: 发射状态(协议表格第28列)
+                    tx_enable = "开启" if data[23] == 0x01 else "关闭"
                     
-                    # 字节35: 极化方式
-                    polarization = "左旋" if data[34] == 0x00 else "右旋"
+                    # 字节24: 极化方式(协议表格第29列)
+                    polarization = "左旋" if data[24] == 0x00 else "右旋"
                     
-                    # 字节36-37: 俯仰角（2字节整数，范围[0°~90°] * 100）
-                    pitch = struct.unpack('>h', data[35:37])[0] / 100.0
+                    # 字节25-26: 俯仰角（2字节整数，范围[-90°~90°] * 100）(协议表格第30-31列)
+                    pitch = struct.unpack('>h', data[25:27])[0] / 100.0
                     
-                    # 字节38-39: 横滚角（2字节整数，范围[-180°~180°] * 100）
-                    roll = struct.unpack('>h', data[37:39])[0] / 100.0
+                    # 字节27-28: 横滚角（2字节整数，范围[-180°~180°] * 100）(协议表格第32-33列)
+                    roll = struct.unpack('>h', data[27:29])[0] / 100.0
                     
-                    # 字节40-41: 方位角（2字节整数，范围[0°~360°] * 100）
-                    heading = struct.unpack('>h', data[39:41])[0] / 100.0
+                    # 字节29-30: 方位角（2字节整数，范围[0°~360°] * 100）(协议表格第34-35列)
+                    heading = struct.unpack('>h', data[29:31])[0] / 100.0
                     
-                    # 字节42-43: 波束偏角（2字节整数，范围[0°~90°] * 100）
-                    beam_off_axis = struct.unpack('>h', data[41:43])[0] / 100.0
+                    # 字节31-32: 波束偏轴角（2字节整数，范围[0°~90°] * 100）(协议表格第36-37列)
+                    beam_off_axis = struct.unpack('>h', data[31:33])[0] / 100.0
                     
-                    # 字节44-45: 波束方位角（2字节整数，范围[0°~360°] * 100）
-                    beam_heading = struct.unpack('>h', data[43:45])[0] / 100.0
+                    # 字节33-34: 波束航向角（2字节整数，范围[0°~360°] * 100）(协议表格第38-39列)
+                    beam_heading = struct.unpack('>h', data[33:35])[0] / 100.0
                     
-                    # 字节46: 对星模式
-                    tracking_mode = "自动" if data[45] == 0x00 else "手动"
+                    # 字节35: 对星模式(协议表格第40列)
+                    tracking_mode = "自动" if data[35] == 0x00 else "手动"
                     
-                    # 字节47: 通信状态（bit5表示天线搜星状态）
-                    comm_status = "搜星完成" if (data[46] & 0x20) else "搜星未完成"
+                    # 字节36: 跟踪模式（bit5表示天线搜星完成状态）(协议表格第41列)
+                    tracking_state = data[36]
+                    antenna_search_status = "搜星完成" if (tracking_state & 0x20) else "搜星未完成"
                     
-                    # 字节48-51: ACU运行时间（4字节整数，秒）
-                    runtime = struct.unpack('>I', data[47:51])[0]
+                    # 字节37: 设备通讯状态(协议表格第42列)
+                    comm_status = data[37]
+                    
+                    # 字节38-41: ACU运行时间（4字节整数，单位为秒）(协议表格第43-46列)
+                    runtime = struct.unpack('>I', data[38:42])[0]
                     
                     result.update({
                         "gps_lock_status": gps_lock_status,
-                        "gps_lng": f"{gps_lng:.6f}",
-                        "gps_lat": f"{gps_lat:.6f}",
-                        "gps_alt": f"{gps_alt:.2f}",
+                        "gps_lng": f"{gps_lng:.2f}",
+                        "gps_lat": f"{gps_lat:.2f}",
+                        "gps_alt": f"{gps_alt}",
                         "rx_freq": f"{rx_freq:.2f}",
                         "tx_freq": f"{tx_freq:.2f}",
                         "rx_lo": f"{rx_lo:.2f}",
@@ -185,9 +236,33 @@ class AFD01_QSProtocol(ProtocolBase):
                         "beam_off_axis": f"{beam_off_axis:.2f}",
                         "beam_heading": f"{beam_heading:.2f}",
                         "tracking_mode": tracking_mode,
-                        "comm_status": comm_status,
+                        "antenna_search_status": antenna_search_status,
+                        "comm_status": f"{comm_status}",
                         "runtime": f"{runtime}s"
                     })
+                    
+                    # 打印解析结果
+                    print("===== 天线状态上报数据解析结果 =====")
+                    print(f"GPS锁定状态: {gps_lock_status}")
+                    print(f"GPS经度: {gps_lng:.2f}°")
+                    print(f"GPS纬度: {gps_lat:.2f}°")
+                    print(f"GPS高度: {gps_alt}米")
+                    print(f"接收频点: {rx_freq:.2f} MHz")
+                    print(f"发射频点: {tx_freq:.2f} MHz")
+                    print(f"接收本振: {rx_lo:.2f} MHz")
+                    print(f"发射本振: {tx_lo:.2f} MHz")
+                    print(f"发射状态: {tx_enable}")
+                    print(f"极化方式: {polarization}")
+                    print(f"俯仰角: {pitch:.2f}°")
+                    print(f"横滚角: {roll:.2f}°")
+                    print(f"方位角: {heading:.2f}°")
+                    print(f"波束偏轴角: {beam_off_axis:.2f}°")
+                    print(f"波束航向角: {beam_heading:.2f}°")
+                    print(f"对星模式: {tracking_mode}")
+                    print(f"天线搜星状态: {antenna_search_status}")
+                    print(f"设备通讯状态: {comm_status}")
+                    print(f"ACU运行时间: {runtime}秒")
+                    print("====================================")
                     
             elif command == self.CMD_SEARCH_PARAM:
                 # 解析搜星参数设置响应

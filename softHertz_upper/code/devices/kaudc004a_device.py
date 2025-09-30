@@ -1,5 +1,6 @@
 import threading
 import queue
+import time
 from common.device_base import DeviceBase
 from devices.kaudc004a_protocol import KauDC004AProtocol
 
@@ -26,37 +27,72 @@ class KauDC004ADevice(DeviceBase):
             "lock_status": "N/A"
         }
         
+        # 添加内部缓冲区，用于累积接收数据
+        self._receive_buffer = bytearray()
+    
     def on_received_data(self, data: bytearray):
-        """处理接收到的数据"""
-        buffer = bytearray(data)
-        while len(buffer) >= 2:
-            if buffer[0] != 0xAA or buffer[1] != 0x55:
-                buffer.pop(0)
-                continue
-            if len(buffer) < 12:
+        print(f"kaudc004a callback [DEBUG] 收到原始数据: {data.hex().upper()}")
+        """处理接收到的数据，改进的帧解析逻辑"""
+        # 防御性检查
+        if not hasattr(self, '_receive_buffer'):
+            self._receive_buffer = bytearray()
+        
+        # 将新数据添加到内部缓冲区
+        self._receive_buffer.extend(data)
+        
+        # 帧解析逻辑
+        while len(self._receive_buffer) >= 2:
+            # 查找帧头 (0xAA 0x55)
+            frame_start = -1
+            for i in range(len(self._receive_buffer) - 1):
+                if self._receive_buffer[i] == 0xAA and self._receive_buffer[i+1] == 0x55:
+                    frame_start = i
+                    break
+            
+            # 如果没有找到帧头，清理缓冲区
+            if frame_start < 0:
+                if len(self._receive_buffer) > 1024:  # 防止缓冲区无限增长
+                    self._receive_buffer.clear()
                 break
-            frame = bytes(buffer[:12])
-            del buffer[:12]
-
-            parsed, msg = self.protocol.parse_response(frame)
-            line = f"<<< 收到: {frame.hex().upper()} [{msg}]"
             
-            if msg == "OK" and parsed:
-                cmd = parsed[0]
-                # 放入响应队列
-                self.response_queue.put((cmd, parsed))
-                # 提取数据并更新设备信息
-                data_dict = self.protocol.extract_data(cmd, parsed)
-                if data_dict:
-                    # 更新设备信息
-                    self._update_device_info(cmd, data_dict)
-                    
-                    # 记录日志
-                    if 'display_text' in data_dict:
-                        self.serial_controller.log("    " + data_dict['display_text'])
+            # 如果帧头之前有无效数据，清除
+            if frame_start > 0:
+                # 记录无效数据（可选）
+                if len(self._receive_buffer[:frame_start]) > 0:
+                    self.serial_controller.log(f"[警告] 清除无效数据: {self._receive_buffer[:frame_start].hex().upper()}")
+                del self._receive_buffer[:frame_start]
             
-            # 记录日志
-            self.serial_controller.log(line)
+            # 检查是否有足够的数据构成完整帧（KauDC004A帧长度为12字节）
+            if len(self._receive_buffer) < 12:
+                break
+            
+            # 提取完整帧
+            frame = bytes(self._receive_buffer[:12])
+            del self._receive_buffer[:12]
+            
+            # 解析帧
+            try:
+                parsed, msg = self.protocol.parse_response(frame)
+                line = f"<<< 收到: {frame.hex().upper()} [{msg}]"
+                
+                if msg == "OK" and parsed:
+                    cmd = parsed[0]
+                    # 放入响应队列
+                    self.response_queue.put((cmd, parsed))
+                    # 提取数据并更新设备信息
+                    data_dict = self.protocol.extract_data(cmd, parsed)
+                    if data_dict:
+                        # 更新设备信息
+                        self._update_device_info(cmd, data_dict)
+                        
+                        # 记录日志
+                        if 'display_text' in data_dict:
+                            self.serial_controller.log("    " + data_dict['display_text'])
+                
+                # 记录日志
+                self.serial_controller.log(line)
+            except Exception as e:
+                self.serial_controller.log(f"[错误] 解析帧时出错: {str(e)}, 帧数据: {frame.hex().upper()}")
     
     def _update_device_info(self, cmd: int, data_dict: dict):
         """更新设备信息"""
@@ -78,7 +114,7 @@ class KauDC004ADevice(DeviceBase):
                 self.device_info["rx_attenuation"] = data_dict['rx_attenuation']
     
     def send_command(self, command_name: str, params=None) -> bool:
-        """发送命令到设备"""
+        """发送命令到设备，改进的命令发送和错误处理逻辑"""
         # 多重防御性检查，确保serial_controller存在且连接状态一致
         if not hasattr(self, 'serial_controller') or self.serial_controller is None:
             return False, "串口控制器不存在"
@@ -94,6 +130,23 @@ class KauDC004ADevice(DeviceBase):
             # 构建命令帧前再检查一次连接状态，防止竞态条件
             if not self.serial_controller.is_connected() or (hasattr(self.serial_controller, 'ser') and self.serial_controller.ser is None):
                 return False, "串口连接状态已变化"
+            
+            # 添加内部缓冲区检查和初始化
+            if not hasattr(self, '_receive_buffer'):
+                self._receive_buffer = bytearray()
+            
+            # 清空内部缓冲区，确保不会有旧数据干扰新命令的响应
+            self._receive_buffer.clear()
+            
+            # 清空响应队列
+            try:
+                while not self.response_queue.empty():
+                    try:
+                        self.response_queue.get_nowait()
+                    except queue.Empty:
+                        break
+            except:
+                pass
             
             payload = b''
             
@@ -148,6 +201,12 @@ class KauDC004ADevice(DeviceBase):
                 return False, "串口连接状态已变化"
             
             success, msg = self.serial_controller.send_data(frame)
+            
+            # 如果命令是查询类命令，等待短暂时间让设备有机会响应
+            if success and command_name in ["版本回读", "温度查询", "本振查询", "衰减查询"]:
+                # 短暂延迟，给设备时间处理命令并发送响应
+                time.sleep(0.1)
+            
             return success, msg
         except Exception as e:
             error_msg = f"发送命令时发生错误: {str(e)}"
@@ -164,9 +223,17 @@ class KauDC004ADevice(DeviceBase):
         return self.device_info.copy()
     
     def _query_device_worker(self):
-        """设备信息查询工作线程"""
+        """设备信息查询工作线程，改进的查询和响应处理逻辑"""
+        # 防御性检查
+        if not hasattr(self, 'serial_controller') or self.serial_controller is None:
+            return
+        
         if not self.serial_controller.is_connected():
             return
+        
+        # 添加内部缓冲区检查和初始化
+        if not hasattr(self, '_receive_buffer'):
+            self._receive_buffer = bytearray()
         
         queries = [
             (0x0B, b'\x0B\x00\x00\x00\x00\x00', "版本回读"),
@@ -174,10 +241,6 @@ class KauDC004ADevice(DeviceBase):
             (0x13, b'\x13\x00\x00\x00\x00\x00', "本振查询"),
             (0x16, b'\x16\x00\x00\x00\x00\x00', "衰减查询")
         ]
-        
-        # 防御性检查，确保serial_controller存在
-        if not hasattr(self, 'serial_controller') or self.serial_controller is None:
-            return
         
         # 安全的日志记录函数
         def safe_log(msg):
@@ -194,6 +257,22 @@ class KauDC004ADevice(DeviceBase):
             safe_log(f"尝试查询设备，第 {attempt+1} 次...")
             all_ok = True
             
+            # 清空内部缓冲区，确保没有残留数据影响本次查询
+            if hasattr(self, '_receive_buffer'):
+                self._receive_buffer.clear()
+            
+            # 清空响应队列
+            try:
+                while not self.response_queue.empty():
+                    try:
+                        self.response_queue.get_nowait()
+                    except queue.Empty:
+                        break
+            except:
+                pass
+            
+            # 发送所有查询命令，然后等待响应
+            sent_commands = []
             for cmd_byte, payload, name in queries:
                 safe_log(f"查询: {name}")
                 
@@ -206,46 +285,60 @@ class KauDC004ADevice(DeviceBase):
                 try:
                     frame = self.protocol.build_frame(payload)
                     
-                    # 再次检查serial_controller
-                    if hasattr(self.serial_controller, 'send_data'):
-                        self.serial_controller.send_data(frame)
+                    # 再次检查serial_controller连接状态
+                    if hasattr(self.serial_controller, 'send_data') and self.serial_controller.is_connected():
+                        success, msg = self.serial_controller.send_data(frame)
+                        if success:
+                            sent_commands.append((cmd_byte, name))
+                        else:
+                            safe_log(f"发送查询指令失败: {msg}")
+                            all_ok = False
                     safe_log(f">>> 发送查询指令: {payload.hex().upper()}")
                 except Exception as e:
                     safe_log(f"发送查询指令时出错: {str(e)}")
                     all_ok = False
-                    continue
+            
+            # 等待响应，为每个命令分配更长的超时时间
+            if sent_commands:
+                safe_log(f"等待{len(sent_commands)}个命令的响应...")
+                received_commands = set()
                 
-                # 清空旧回复
-                try:
-                    while not self.response_queue.empty():
-                        try:
-                            self.response_queue.get_nowait()
-                        except queue.Empty:
-                            break
-                except:
-                    pass
+                # 总共等待5秒，足够所有命令响应
+                start_time = time.time()
+                while time.time() - start_time < 5 and len(received_commands) < len(sent_commands):
+                    try:
+                        # 使用较短的超时，以便能够检查多个命令的响应
+                        got_cmd, parsed = self.response_queue.get(timeout=0.5)
+                        
+                        # 查找对应的命令名称
+                        cmd_name = "未知命令"
+                        for cmd_byte, name in sent_commands:
+                            if cmd_byte == got_cmd:
+                                cmd_name = name
+                                break
+                        
+                        safe_log(f"{cmd_name} 查询成功，回复正常")
+                        received_commands.add(got_cmd)
+                    except queue.Empty:
+                        # 继续等待，不立即判定超时
+                        continue
+                    except Exception as e:
+                        safe_log(f"处理响应时出错: {str(e)}")
                 
-                try:
-                    # 等待响应
-                    got_cmd, parsed = self.response_queue.get(timeout=2)
-                    if got_cmd == cmd_byte:
-                        safe_log(f"{name} 查询成功，回复正常")
-                    else:
+                # 检查是否所有命令都收到了响应
+                for cmd_byte, name in sent_commands:
+                    if cmd_byte not in received_commands:
                         all_ok = False
-                        safe_log(f"{name} 收到错帧: 0x{got_cmd:02X}")
-                except queue.Empty:
-                    all_ok = False
-                    safe_log(f"{name} 查询超时无响应")
-                except Exception as e:
-                    all_ok = False
-                    safe_log(f"等待响应时出错: {str(e)}")
+                        safe_log(f"{name} 查询超时无响应")
             
             if all_ok:
-                safe_log("✅ 设备查询完成，全部成功！")
+                safe_log("✅ 所有查询成功完成！")
                 break
             else:
                 safe_log("❌ 本轮查询有失败，重试...")
-        else:
+                time.sleep(0.5)  # 重试前短暂暂停
+        
+        if not all_ok:
             safe_log("❌ 所有查询尝试失败！请检查设备连接或协议配置。")
     
     def get_supported_commands(self) -> list:
