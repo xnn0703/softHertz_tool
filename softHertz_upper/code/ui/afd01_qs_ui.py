@@ -175,9 +175,9 @@ class AFD01_QS_UI(UIBase):
         # 对星模式选择
         ttk.Label(self.tracking_mode_frame, text="选择模式: ").grid(row=0, column=0, sticky="w", padx=5, pady=5)
         self.tracking_mode_var = tk.IntVar(value=0)
-        self.tracking_mode_manual_rb = ttk.Radiobutton(self.tracking_mode_frame, text="手动", variable=self.tracking_mode_var, value=0)
+        self.tracking_mode_manual_rb = ttk.Radiobutton(self.tracking_mode_frame, text="手动", variable=self.tracking_mode_var, value=1)
         self.tracking_mode_manual_rb.grid(row=0, column=1, sticky="w", padx=5, pady=5)
-        self.tracking_mode_auto_rb = ttk.Radiobutton(self.tracking_mode_frame, text="自动", variable=self.tracking_mode_var, value=1)
+        self.tracking_mode_auto_rb = ttk.Radiobutton(self.tracking_mode_frame, text="自动", variable=self.tracking_mode_var, value=0)
         self.tracking_mode_auto_rb.grid(row=0, column=2, sticky="w", padx=5, pady=5)
         # TLE生效方式：卫星经度设置为0（在卫星参数部分设置）
         
@@ -315,13 +315,13 @@ class AFD01_QS_UI(UIBase):
         """处理对星模式命令"""
         cmd_name = "对星模式"
         try:
-            # 对星模式命令，参数是模式编号 (0=手动, 1=自动)
+            # 对星模式命令，参数是模式编号 (0=自动, 1=手动)
             mode = self.tracking_mode_var.get()
             
             # 发送命令
             success, msg = self.device.send_command(cmd_name, mode)
             if success:
-                mode_text = "手动" if mode == 0 else "自动"
+                mode_text = "自动" if mode == 0 else "手动"
                 self.log_message(f"[成功] 命令发送成功: {cmd_name} - {mode_text} - {msg}")
             else:
                 self.log_message(f"[错误] 命令发送失败: {cmd_name} - {msg}")

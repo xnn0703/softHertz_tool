@@ -294,7 +294,7 @@ class AFD01_QSProtocol(ProtocolBase):
                 # 解析对星模式设置响应
                 if len(data) >= 1:
                     success = data[0] == 0x01
-                    mode_str = {0: "手动", 1: "自动", 2: "TLE跟踪"}.get(data[0] & 0x03, "未知")
+                    mode_str = {0: "自动", 1: "手动", 2: "TLE跟踪"}.get(data[0] & 0x03, "未知")
                     result.update({
                         "comm_status": "设置成功" if success else "设置失败",
                         "tracking_mode": mode_str,
@@ -390,7 +390,7 @@ class AFD01_QSProtocol(ProtocolBase):
     def build_tracking_mode_cmd(self, mode):
         """构建对星模式命令"""
         command = self.CMD_TRACKING_MODE
-        # 打包参数：模式(1字节，0-手动，1-自动，2-TLE跟踪)
+        # 打包参数：模式(1字节，0-自动，1-手动，2-TLE跟踪)
         data = bytes([mode & 0x03])
         # 构建完整帧
         return self._build_common_frame(command, data)
