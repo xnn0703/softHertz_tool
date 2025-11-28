@@ -25,6 +25,9 @@ class UIBase:
         if hasattr(self, 'device_type_cb'):
             self.device_type_cb.set(device_type)
         
+        # 设备切换后立即更新串口列表
+        self.update_ports()
+        
     def destroy(self):
         """清理资源，停止定时器"""
         print("[DEBUG] UIBase: 清理资源，停止定时器")

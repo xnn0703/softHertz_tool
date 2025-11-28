@@ -1,5 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
+import threading
+import time
 from ui.ui_base import UIBase
 
 class AFD01_QS_UI(UIBase):
@@ -18,6 +20,7 @@ class AFD01_QS_UI(UIBase):
             "tracking_mode_frame": {"row": 11, "column": 0, "columnspan": 7, "padx": 5, "pady": 5, "sticky": "ew"},
             "tx_enable_frame": {"row": 12, "column": 0, "columnspan": 7, "padx": 5, "pady": 5, "sticky": "ew"},
             "tle_frame": {"row": 13, "column": 0, "columnspan": 7, "padx": 5, "pady": 5, "sticky": "ew"},
+            "performance_test_frame": {"row": 14, "column": 0, "columnspan": 7, "padx": 5, "pady": 5, "sticky": "ew"},
             "log_frame": {"row": 16, "column": 0, "columnspan": 7, "padx": 5, "pady": 5, "sticky": "nsew"},
         }
         
@@ -220,6 +223,40 @@ class AFD01_QS_UI(UIBase):
         self.tle_btn = ttk.Button(self.tle_frame, text="设置TLE", command=self.on_tle_config)
         self.tle_btn.grid(row=2, column=6, sticky="e", padx=5, pady=5)
         
+        # 性能测试分组框
+        self.performance_test_frame = ttk.LabelFrame(self.master, text="性能测试", padding=(10, 5))
+        self.performance_test_frame.grid(**self.layout_config["performance_test_frame"])
+        
+        # 测试参数输入
+        ttk.Label(self.performance_test_frame, text="发送间隔(ms): ").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        self.interval_entry = ttk.Entry(self.performance_test_frame, width=10)
+        self.interval_entry.grid(row=0, column=1, sticky="w", padx=5, pady=5)
+        self.interval_entry.insert(0, "100")  # 默认100ms
+        
+        ttk.Label(self.performance_test_frame, text="发送次数: ").grid(row=0, column=2, sticky="w", padx=5, pady=5)
+        self.count_entry = ttk.Entry(self.performance_test_frame, width=10)
+        self.count_entry.grid(row=0, column=3, sticky="w", padx=5, pady=5)
+        self.count_entry.insert(0, "10")  # 默认10次
+        
+        # 测试控制按钮
+        self.start_test_btn = ttk.Button(self.performance_test_frame, text="开始测试", command=self.start_performance_test)
+        self.start_test_btn.grid(row=0, column=4, sticky="w", padx=5, pady=5)
+        
+        self.stop_test_btn = ttk.Button(self.performance_test_frame, text="停止测试", command=self.stop_performance_test, state=tk.DISABLED)
+        self.stop_test_btn.grid(row=0, column=5, sticky="w", padx=5, pady=5)
+        
+        # 状态显示
+        ttk.Label(self.performance_test_frame, text="测试状态: ").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        self.test_status_var = tk.StringVar(value="空闲")
+        self.test_status_label = ttk.Label(self.performance_test_frame, textvariable=self.test_status_var, foreground="green")
+        self.test_status_label.grid(row=1, column=1, sticky="w", padx=5, pady=5)
+        
+        # 总耗时显示
+        ttk.Label(self.performance_test_frame, text="总耗时(ms): ").grid(row=1, column=2, sticky="w", padx=5, pady=5)
+        self.total_time_var = tk.StringVar(value="0")
+        self.total_time_label = ttk.Label(self.performance_test_frame, textvariable=self.total_time_var)
+        self.total_time_label.grid(row=1, column=3, sticky="w", padx=5, pady=5)
+        
         # 日志区域分组框
         self.log_frame = ttk.LabelFrame(self.master, text="日志", padding=(10, 5))
         self.log_frame.grid(**self.layout_config["log_frame"])
@@ -236,6 +273,11 @@ class AFD01_QS_UI(UIBase):
         # 配置日志框架的行列权重，使日志文本框可以自动调整大小
         self.log_frame.grid_rowconfigure(0, weight=1)
         self.log_frame.grid_columnconfigure(0, weight=1)
+        
+        # 性能测试状态跟踪
+        self.test_running = False
+        self.test_thread = None
+        self.test_stop_event = None
     
     def on_report_data(self):
         """处理数据上报命令"""
@@ -492,3 +534,143 @@ class AFD01_QS_UI(UIBase):
                 self.device_type_change_callback(new_device_type)
             else:
                 print(f"[DEBUG] AFD01_QS_UI: 没有设置device_type_change_callback")
+    
+    def stop_performance_test(self):
+        """停止性能测试"""
+        if self.test_running and self.test_stop_event:
+            # 设置停止事件
+            self.test_stop_event.set()
+            
+            # 更新UI状态
+            self.test_status_var.set("停止中")
+            self.test_status_label.config(foreground="orange")
+            self.log_message("[性能测试] 正在停止测试...")
+            
+            # 停止时也禁用性能测试模式
+            if hasattr(self.device, 'serial_controller'):
+                self.device.serial_controller.performance_test_mode = False
+    
+    def start_performance_test(self):
+        """开始性能测试"""
+        try:
+            # 验证输入参数
+            interval = int(self.interval_entry.get())
+            count = int(self.count_entry.get())
+            
+            if interval < 1:
+                self.log_message("[错误] 发送间隔必须大于等于1ms")
+                return
+            
+            if count < 1:
+                self.log_message("[错误] 发送次数必须大于等于1")
+                return
+            
+            # 启用性能测试模式
+            if hasattr(self.device, 'serial_controller'):
+                self.device.serial_controller.performance_test_mode = True
+            
+            # 更新UI状态
+            self.test_running = True
+            self.test_status_var.set("运行中")
+            self.test_status_label.config(foreground="red")
+            self.start_test_btn.config(state=tk.DISABLED)
+            self.stop_test_btn.config(state=tk.NORMAL)
+            self.total_time_var.set("0")
+            
+            # 记录日志
+            self.log_message(f"[性能测试] 开始测试: 间隔{interval}ms, 发送{count}次")
+            
+            # 创建停止事件
+            self.test_stop_event = threading.Event()
+            
+            # 启动测试线程
+            self.test_thread = threading.Thread(
+                target=self._run_performance_test,
+                args=(interval, count)
+            )
+            self.test_thread.daemon = True
+            self.test_thread.start()
+            
+        except ValueError as e:
+            self.log_message(f"[错误] 参数格式错误: {str(e)}")
+        except Exception as e:
+            self.log_message(f"[错误] 开始测试失败: {str(e)}")
+    
+    def _run_performance_test(self, interval, count):
+        """性能测试线程函数"""
+        try:
+            # 记录开始时间（使用更精确的perf_counter）
+            start_time = time.perf_counter()
+            
+            # 预计算间隔时间（减少重复计算）
+            sleep_interval = interval / 1000.0
+            
+            # 复用params字典（减少内存分配）
+            params = {'pitch': 0.0, 'heading': 0.0}
+            
+            # 预获取方法引用（减少属性查找）
+            send_command = self.device.send_command
+            stop_event_is_set = self.test_stop_event.is_set
+            log_message = self.log_message
+            
+            # 循环发送N次接收波束配置指令
+            for i in range(count):
+                # 检查是否需要停止测试
+                if stop_event_is_set():
+                    # 只在停止时记录一次日志
+                    log_message("[性能测试] 测试已停止")
+                    break
+                
+                # 交替使用0°和30°角度（优化计算）
+                angle = 0.0 if (i & 1) == 0 else 30.0
+                
+                # 更新参数（复用字典，减少内存分配）
+                params['pitch'] = angle
+                params['heading'] = angle
+                
+                # 发送命令，不记录中间结果
+                send_command("接收波束配置", params)
+                
+                # 等待指定间隔（最后一次发送后不等待）
+                if i < count - 1:
+                    # 使用预计算的间隔时间
+                    time.sleep(sleep_interval)
+            
+            # 计算总耗时（使用perf_counter获取更精确的时间）
+            end_time = time.perf_counter()
+            total_time_ms = int((end_time - start_time) * 1000)
+            
+            # 更新UI状态
+            self.test_running = False
+            
+            # 批量更新UI，减少UI刷新次数
+            def update_ui():
+                self.test_status_var.set("完成")
+                self.test_status_label.config(foreground="green")
+                self.start_test_btn.config(state=tk.NORMAL)
+                self.stop_test_btn.config(state=tk.DISABLED)
+                self.total_time_var.set(str(total_time_ms))
+            
+            self.master.after(0, update_ui)
+            
+            # 只在测试完成时记录日志
+            log_message(f"[性能测试] 测试完成，总耗时: {total_time_ms}ms")
+            log_message(f"[性能测试] 平均间隔: {total_time_ms / count:.2f}ms/次")
+            
+        except Exception as e:
+            # 处理异常
+            self.test_running = False
+            
+            # 批量更新UI
+            def update_ui_error():
+                self.test_status_var.set("异常")
+                self.test_status_label.config(foreground="red")
+                self.start_test_btn.config(state=tk.NORMAL)
+                self.stop_test_btn.config(state=tk.DISABLED)
+            
+            self.master.after(0, update_ui_error)
+            self.log_message(f"[性能测试] 测试异常: {str(e)}")
+        finally:
+            # 无论测试成功还是失败，都要禁用性能测试模式
+            if hasattr(self.device, 'serial_controller'):
+                self.device.serial_controller.performance_test_mode = False

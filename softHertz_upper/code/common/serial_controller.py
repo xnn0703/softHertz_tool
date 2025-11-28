@@ -15,6 +15,8 @@ class SerialController:
         self.receive_thread = None
         # 存储当前设备类型，默认为KauDC004A
         self.current_device_type = "KauDC004A"
+        # 性能测试模式标志
+        self.performance_test_mode = False
         
     def update_ports(self):
         """获取当前可用的串口列表"""
@@ -75,41 +77,40 @@ class SerialController:
     
     def send_data(self, data):
         """发送数据到串口"""
-        # 双重检查确保串口状态一致
-        if self.ser is None:
-            error_msg = "串口对象为空"
-            self.log(f"[错误] {error_msg}")
-            return False, error_msg
-        
-        if not hasattr(self.ser, 'is_open'):
-            error_msg = "串口对象无效"
-            self.log(f"[错误] {error_msg}")
+        # 基本状态检查
+        if self.ser is None or not hasattr(self.ser, 'is_open') or not self.ser.is_open:
+            error_msg = "串口未打开或无效"
+            if not self.performance_test_mode:
+                self.log(f"[错误] {error_msg}")
             # 重置状态
             self.ser = None
             return False, error_msg
             
-        if not self.ser.is_open:
-            error_msg = "串口未打开"
-            self.log(f"[错误] {error_msg}")
-            # 确保状态一致
-            self.ser = None
-            return False, error_msg
-            
         try:
-            # 再次检查is_open，防止竞态条件
-            if not self.ser or not self.ser.is_open:
-                error_msg = "串口状态已变化"
-                self.log(f"[错误] {error_msg}")
-                self.ser = None
-                return False, error_msg
+            # 性能测试模式下减少状态检查冗余
+            if not self.performance_test_mode:
+                # 非性能模式下的额外状态检查
+                if not self.ser or not self.ser.is_open:
+                    error_msg = "串口状态已变化"
+                    self.log(f"[错误] {error_msg}")
+                    self.ser = None
+                    return False, error_msg
                 
+            # 发送数据
             self.ser.write(data)
-            line = f">>> 发送: {data.hex().upper()}"
-            self.log(line)
-            return True, line
+            
+            # 性能测试模式下减少日志
+            if not self.performance_test_mode:
+                line = f">>> 发送: {data.hex().upper()}"
+                self.log(line)
+                return True, line
+            else:
+                return True, "发送成功"
+                
         except Exception as e:
             error_msg = f"发送错误: {str(e)}"
-            self.log(f"[错误] {error_msg}")
+            if not self.performance_test_mode:
+                self.log(f"[错误] {error_msg}")
             # 发生异常时，强制重置串口对象确保状态一致
             self.ser = None
             # 强制更新运行状态
@@ -126,20 +127,22 @@ class SerialController:
                     chunk = self.ser.read(1024)  # 增加读取缓冲区大小
                     if chunk:
                         buffer.extend(chunk)
-                        # 实时记录接收到的数据
-                        line = f"<<< 原始接收: {chunk.hex().upper()}"
-                        self.log(line)
-                        # print(line)
+                        
+                        # 性能测试模式下减少或关闭原始数据日志
+                        if not self.performance_test_mode:
+                            # 实时记录接收到的数据
+                            line = f"<<< 原始接收: {chunk.hex().upper()}"
+                            self.log(line)
+                        
                         # 检查是否有足够的数据来处理
                         if self.received_data_callback:
                             # 根据当前设备类型动态选择帧头检测策略
                             trigger_callback = False
-                            print(f"[DEBUG] 当前设备类型: {self.current_device_type}")
+                            
                             if self.current_device_type == "KauDC004A":
                                 # KauDC004A设备使用双字节帧头0xAA 0x55
                                 trigger_callback = len(buffer) >= 2 and buffer[-2:] == b'\xAA\x55'
                             elif self.current_device_type == "AFD01_QS":
-                                print(f"[DEBUG] 缓冲区数据: {buffer.hex().upper()}")
                                 # AFD01_QS设备使用单字节帧头0x55
                                 trigger_callback = len(buffer) >= 1 and buffer[-1:] == b'\x55'
                             
@@ -147,18 +150,21 @@ class SerialController:
                             trigger_callback = trigger_callback or len(buffer) >= 64
                             
                             if trigger_callback:
-                                print(f"[DEBUG] 触发回调函数，缓冲区长度: {len(buffer)}")
                                 try:
                                     # 创建buffer的副本传递给回调，避免回调中的操作影响当前buffer
                                     self.received_data_callback(bytearray(buffer))
-                                    print(f"[DEBUG] 回调函数执行完成")
                                 except Exception as e:
-                                    print(f"[DEBUG] 回调函数执行异常: {str(e)}")
-                                    self.log(f"[回调错误] {str(e)}")
-                time.sleep(0.005)  # 稍微增加睡眠时间，减少CPU占用
+                                    if not self.performance_test_mode:
+                                        self.log(f"[回调错误] {str(e)}")
+                
+                # 调整睡眠时间，性能测试模式下增加睡眠时间减少CPU占用
+                sleep_time = 0.01 if self.performance_test_mode else 0.005
+                time.sleep(sleep_time)
             except Exception as e:
-                err = f"[接收错误] {e}"
-                self.log(err)
+                # 性能测试模式下减少错误日志
+                if not self.performance_test_mode:
+                    err = f"[接收错误] {e}"
+                    self.log(err)
                 time.sleep(0.1)
     
     def close(self):
