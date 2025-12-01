@@ -15,8 +15,43 @@ class UIBase:
         # 保存定时器ID
         self.update_ports_timer = None
         self.ui_update_timer = None
+        
+        # 创建滚动框架和垂直滚动条
+        self.create_scrollable_frame()
+        
         self.create_widgets()
         self.setup_callbacks()
+    
+    def create_scrollable_frame(self):
+        """创建可滚动框架"""
+        # 创建垂直滚动条
+        self.v_scrollbar = ttk.Scrollbar(self.master, orient="vertical")
+        self.v_scrollbar.grid(row=0, column=1, sticky="ns")
+        
+        # 创建Canvas
+        self.canvas = tk.Canvas(self.master, yscrollcommand=self.v_scrollbar.set)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        
+        # 配置滚动条与Canvas的关联
+        self.v_scrollbar.config(command=self.canvas.yview)
+        
+        # 创建滚动框架，作为Canvas的内容窗口
+        self.scrollable_frame = ttk.Frame(self.canvas)
+        self.scrollable_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        
+        # 将滚动框架添加到Canvas
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        
+        # 配置主窗口的行和列权重
+        self.master.grid_rowconfigure(0, weight=1)
+        self.master.grid_columnconfigure(0, weight=1)
+        
+        # 绑定鼠标滚轮事件
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        
+    def _on_mousewheel(self, event):
+        """处理鼠标滚轮事件"""
+        self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
         
     def set_device_type(self, device_type):
         """设置设备类型"""
@@ -43,26 +78,26 @@ class UIBase:
     def create_widgets(self):
         """创建UI组件"""
         # 设备类型选择区域
-        self.device_type_label = ttk.Label(self.master, text="设备类型:")
+        self.device_type_label = ttk.Label(self.scrollable_frame, text="设备类型:")
         self.device_type_label.grid(row=0, column=0, padx=5, pady=5)
-        self.device_type_cb = ttk.Combobox(self.master, values=["KauDC004A", "AFD01_QS"], width=12)
+        self.device_type_cb = ttk.Combobox(self.scrollable_frame, values=["KauDC004A", "AFD01_QS"], width=12)
         self.device_type_cb.grid(row=0, column=1, padx=5, pady=5)
         self.device_type_cb.set("KauDC004A")
         self.device_type_cb.bind("<<ComboboxSelected>>", self.on_device_type_changed)
         
         # 串口设置区域
-        self.port_label = ttk.Label(self.master, text="串口:")
+        self.port_label = ttk.Label(self.scrollable_frame, text="串口:")
         self.port_label.grid(row=0, column=2, padx=5, pady=5)
-        self.port_cb = ttk.Combobox(self.master, width=10)
+        self.port_cb = ttk.Combobox(self.scrollable_frame, width=10)
         self.port_cb.grid(row=0, column=3, padx=5, pady=5)
         
-        self.baud_label = ttk.Label(self.master, text="波特率:")
+        self.baud_label = ttk.Label(self.scrollable_frame, text="波特率:")
         self.baud_label.grid(row=0, column=4, padx=5, pady=5)
-        self.baud_cb = ttk.Combobox(self.master, values=["9600", "19200", "38400", "115200", "921600"], width=10)
+        self.baud_cb = ttk.Combobox(self.scrollable_frame, values=["9600", "19200", "38400", "115200", "921600"], width=10)
         self.baud_cb.grid(row=0, column=5, padx=5, pady=5)
         self.baud_cb.set("115200")
         
-        self.connect_btn = ttk.Button(self.master, text="打开串口", command=self.toggle_serial)
+        self.connect_btn = ttk.Button(self.scrollable_frame, text="打开串口", command=self.toggle_serial)
         self.connect_btn.grid(row=0, column=6, padx=5, pady=5)
     
     def setup_callbacks(self):

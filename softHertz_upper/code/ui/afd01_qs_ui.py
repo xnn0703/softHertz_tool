@@ -26,9 +26,9 @@ class AFD01_QS_UI(UIBase):
         
         super().__init__(master, device)
         
-        # 配置主窗口的行和列权重，使UI可以适当缩放
-        self.master.grid_rowconfigure(17, weight=1)
-        self.master.grid_columnconfigure(0, weight=1)
+        # 配置滚动框架的行和列权重，使UI可以适当缩放
+        self.scrollable_frame.grid_rowconfigure(17, weight=1)
+        self.scrollable_frame.grid_columnconfigure(0, weight=1)
         
     def create_widgets(self):
         """创建UI组件"""
@@ -41,7 +41,7 @@ class AFD01_QS_UI(UIBase):
     def create_specific_widgets(self):
         """创建特定于AFD01_QS设备的UI组件"""
         # 设备状态表格
-        self.status_frame = ttk.Frame(self.master)
+        self.status_frame = ttk.Frame(self.scrollable_frame)
         self.status_frame.grid(**self.layout_config["status_table"])
         
         # 创建状态标签和值标签
@@ -69,7 +69,7 @@ class AFD01_QS_UI(UIBase):
         
         # 创建分组框
         # 数据上报参数分组框
-        self.report_data_frame = ttk.LabelFrame(self.master, text="数据上报参数", padding=(10, 5))
+        self.report_data_frame = ttk.LabelFrame(self.scrollable_frame, text="数据上报参数", padding=(10, 5))
         self.report_data_frame.grid(**self.layout_config["report_data_frame"])
         
         # 信噪比输入
@@ -115,7 +115,7 @@ class AFD01_QS_UI(UIBase):
         self.report_data_btn.grid(row=2, column=5, sticky="e", padx=5, pady=5)
         
         # 卫星参数分组框
-        self.satellite_param_frame = ttk.LabelFrame(self.master, text="卫星参数与频率设置", padding=(10, 5))
+        self.satellite_param_frame = ttk.LabelFrame(self.scrollable_frame, text="卫星参数与频率设置", padding=(10, 5))
         self.satellite_param_frame.grid(**self.layout_config["satellite_param_frame"])
         
         # 卫星参数输入
@@ -147,7 +147,7 @@ class AFD01_QS_UI(UIBase):
         self.search_param_btn.grid(row=1, column=5, sticky="e", padx=5, pady=5)
         
         # 波束控制分组框
-        self.beam_control_frame = ttk.LabelFrame(self.master, text="波束控制", padding=(10, 5))
+        self.beam_control_frame = ttk.LabelFrame(self.scrollable_frame, text="波束控制", padding=(10, 5))
         self.beam_control_frame.grid(**self.layout_config["beam_control_frame"])
         
         # 波束控制参数
@@ -172,7 +172,7 @@ class AFD01_QS_UI(UIBase):
         self.both_beam_btn.grid(row=0, column=6, sticky="w", padx=5, pady=5)
         
         # 对星模式分组框
-        self.tracking_mode_frame = ttk.LabelFrame(self.master, text="对星模式", padding=(10, 5))
+        self.tracking_mode_frame = ttk.LabelFrame(self.scrollable_frame, text="对星模式", padding=(10, 5))
         self.tracking_mode_frame.grid(**self.layout_config["tracking_mode_frame"])
         
         # 对星模式选择
@@ -189,7 +189,7 @@ class AFD01_QS_UI(UIBase):
         self.tracking_mode_btn.grid(row=0, column=4, sticky="w", padx=5, pady=5)
         
         # 发射开关分组框
-        self.tx_enable_frame = ttk.LabelFrame(self.master, text="发射开关", padding=(10, 5))
+        self.tx_enable_frame = ttk.LabelFrame(self.scrollable_frame, text="发射开关", padding=(10, 5))
         self.tx_enable_frame.grid(**self.layout_config["tx_enable_frame"])
         
         # 发射开关选项
@@ -205,7 +205,7 @@ class AFD01_QS_UI(UIBase):
         self.tx_enable_btn.grid(row=0, column=3, sticky="w", padx=5, pady=5)
         
         # TLE配置分组框
-        self.tle_frame = ttk.LabelFrame(self.master, text="TLE配置", padding=(10, 5))
+        self.tle_frame = ttk.LabelFrame(self.scrollable_frame, text="TLE配置", padding=(10, 5))
         self.tle_frame.grid(**self.layout_config["tle_frame"])
         
         # TLE输入区域
@@ -224,41 +224,58 @@ class AFD01_QS_UI(UIBase):
         self.tle_btn.grid(row=2, column=6, sticky="e", padx=5, pady=5)
         
         # 性能测试分组框
-        self.performance_test_frame = ttk.LabelFrame(self.master, text="性能测试", padding=(10, 5))
+        self.performance_test_frame = ttk.LabelFrame(self.scrollable_frame, text="性能测试", padding=(10, 5))
         self.performance_test_frame.grid(**self.layout_config["performance_test_frame"])
         
+        # 测试类型选择
+        ttk.Label(self.performance_test_frame, text="测试类型: ").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        self.test_type_var = tk.StringVar(value="接收波束配置")
+        
+        # 测试类型选择框架
+        test_type_frame = ttk.Frame(self.performance_test_frame)
+        test_type_frame.grid(row=0, column=1, columnspan=2, sticky="w", padx=5, pady=5)
+        
+        # 接收波束配置单选按钮
+        ttk.Radiobutton(test_type_frame, text="接收波束配置", variable=self.test_type_var, value="接收波束配置").grid(row=0, column=0, sticky="w", padx=5)
+        
+        # 发射波束配置单选按钮
+        ttk.Radiobutton(test_type_frame, text="发射波束配置", variable=self.test_type_var, value="发射波束配置").grid(row=0, column=1, sticky="w", padx=5)
+        
+        # 收发波束同时控制单选按钮
+        ttk.Radiobutton(test_type_frame, text="收发波束同时控制", variable=self.test_type_var, value="收发波束同时控制").grid(row=0, column=2, sticky="w", padx=5)
+        
         # 测试参数输入
-        ttk.Label(self.performance_test_frame, text="发送间隔(ms): ").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(self.performance_test_frame, text="发送间隔(ms): ").grid(row=1, column=0, sticky="w", padx=5, pady=5)
         self.interval_entry = ttk.Entry(self.performance_test_frame, width=10)
-        self.interval_entry.grid(row=0, column=1, sticky="w", padx=5, pady=5)
+        self.interval_entry.grid(row=1, column=1, sticky="w", padx=5, pady=5)
         self.interval_entry.insert(0, "100")  # 默认100ms
         
-        ttk.Label(self.performance_test_frame, text="发送次数: ").grid(row=0, column=2, sticky="w", padx=5, pady=5)
+        ttk.Label(self.performance_test_frame, text="发送次数: ").grid(row=1, column=2, sticky="w", padx=5, pady=5)
         self.count_entry = ttk.Entry(self.performance_test_frame, width=10)
-        self.count_entry.grid(row=0, column=3, sticky="w", padx=5, pady=5)
+        self.count_entry.grid(row=1, column=3, sticky="w", padx=5, pady=5)
         self.count_entry.insert(0, "10")  # 默认10次
         
         # 测试控制按钮
         self.start_test_btn = ttk.Button(self.performance_test_frame, text="开始测试", command=self.start_performance_test)
-        self.start_test_btn.grid(row=0, column=4, sticky="w", padx=5, pady=5)
+        self.start_test_btn.grid(row=1, column=4, sticky="w", padx=5, pady=5)
         
         self.stop_test_btn = ttk.Button(self.performance_test_frame, text="停止测试", command=self.stop_performance_test, state=tk.DISABLED)
-        self.stop_test_btn.grid(row=0, column=5, sticky="w", padx=5, pady=5)
+        self.stop_test_btn.grid(row=1, column=5, sticky="w", padx=5, pady=5)
         
         # 状态显示
-        ttk.Label(self.performance_test_frame, text="测试状态: ").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(self.performance_test_frame, text="测试状态: ").grid(row=2, column=0, sticky="w", padx=5, pady=5)
         self.test_status_var = tk.StringVar(value="空闲")
         self.test_status_label = ttk.Label(self.performance_test_frame, textvariable=self.test_status_var, foreground="green")
-        self.test_status_label.grid(row=1, column=1, sticky="w", padx=5, pady=5)
+        self.test_status_label.grid(row=2, column=1, sticky="w", padx=5, pady=5)
         
         # 总耗时显示
-        ttk.Label(self.performance_test_frame, text="总耗时(ms): ").grid(row=1, column=2, sticky="w", padx=5, pady=5)
+        ttk.Label(self.performance_test_frame, text="总耗时(ms): ").grid(row=2, column=2, sticky="w", padx=5, pady=5)
         self.total_time_var = tk.StringVar(value="0")
         self.total_time_label = ttk.Label(self.performance_test_frame, textvariable=self.total_time_var)
-        self.total_time_label.grid(row=1, column=3, sticky="w", padx=5, pady=5)
+        self.total_time_label.grid(row=2, column=3, sticky="w", padx=5, pady=5)
         
         # 日志区域分组框
-        self.log_frame = ttk.LabelFrame(self.master, text="日志", padding=(10, 5))
+        self.log_frame = ttk.LabelFrame(self.scrollable_frame, text="日志", padding=(10, 5))
         self.log_frame.grid(**self.layout_config["log_frame"])
         
         # 滚动文本框用于显示日志
@@ -613,7 +630,10 @@ class AFD01_QS_UI(UIBase):
             stop_event_is_set = self.test_stop_event.is_set
             log_message = self.log_message
             
-            # 循环发送N次接收波束配置指令
+            # 获取测试类型
+            test_type = self.test_type_var.get()
+            
+            # 循环发送N次指令，根据测试类型发送不同命令
             for i in range(count):
                 # 检查是否需要停止测试
                 if stop_event_is_set():
@@ -629,7 +649,7 @@ class AFD01_QS_UI(UIBase):
                 params['heading'] = angle
                 
                 # 发送命令，不记录中间结果
-                send_command("接收波束配置", params)
+                send_command(test_type, params)
                 
                 # 等待指定间隔（最后一次发送后不等待）
                 if i < count - 1:
