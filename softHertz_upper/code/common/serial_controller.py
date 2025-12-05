@@ -4,19 +4,16 @@ import threading
 import datetime
 import queue
 import time
+from common.communication_base import CommunicationBase
 
-class SerialController:
+class SerialController(CommunicationBase):
     def __init__(self):
+        super().__init__()
         self.ser = None
-        self.running = False
-        self.logfile = open("serial_log.txt", "a", encoding="utf-8")
-        self.response_queue = queue.Queue()
-        self.received_data_callback = None
-        self.receive_thread = None
-        # 存储当前设备类型，默认为KauDC004A
         self.current_device_type = "KauDC004A"
-        # 性能测试模式标志
-        self.performance_test_mode = False
+        # 重定向日志文件到serial_log.txt
+        self.logfile.close()
+        self.logfile = open("serial_log.txt", "a", encoding="utf-8")
         
     def update_ports(self):
         """获取当前可用的串口列表"""
@@ -56,13 +53,13 @@ class SerialController:
                 pass
     
     def toggle_serial(self, port, baud_rate):
+        """打开或关闭串口（兼容旧接口）"""
+        return self.toggle_connection(port, baud_rate)
+    
+    def toggle_connection(self, port, baud_rate):
         """打开或关闭串口"""
         if self.ser and self.ser.is_open:
-            self.running = False
-            if self.receive_thread and self.receive_thread.is_alive():
-                self.receive_thread.join(timeout=1.0)
-            self.ser.close()
-            self.ser = None  # 明确设置为None
+            self.close()
             return True, "串口已关闭"
         else:
             try:
@@ -145,6 +142,9 @@ class SerialController:
                             elif self.current_device_type == "AFD01_QS":
                                 # AFD01_QS设备使用单字节帧头0x55
                                 trigger_callback = len(buffer) >= 1 and buffer[-1:] == b'\x55'
+                            elif self.current_device_type == "DEBUG":
+                                # DEBUG设备使用双字节帧头0xAA 0x55和帧尾0xEE
+                                trigger_callback = b'\xAA\x55' in buffer and b'\xEE' in buffer
                             
                             # 安全机制：当缓冲区足够大时也触发回调，防止数据堆积
                             trigger_callback = trigger_callback or len(buffer) >= 64

@@ -1,0 +1,8 @@
+*.pyc
+*.spec
+*.html
+*.txt
+*.toc
+*.pyz
+*.zip
+

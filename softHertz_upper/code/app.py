@@ -139,6 +139,16 @@ class Application:
             # 设置设备类型变更回调函数
             print(f"[DEBUG] 为AFD01_QS_UI设置回调函数")
             self.ui.device_type_change_callback = self.switch_device
+        elif device_type == "DEBUG":
+            print(f"[DEBUG] 创建DEBUG设备和UI")
+            from devices.debug_device import DebugDevice
+            from ui.debug_ui import DebugUI
+            
+            self.device = DebugDevice(self.serial_controller)
+            self.ui = DebugUI(self.ui_container, self.device)
+            # 设置设备类型变更回调函数
+            print(f"[DEBUG] 为DebugUI设置回调函数")
+            self.ui.device_type_change_callback = self.switch_device
         else:
             print(f"[DEBUG] 未知设备类型: {device_type}")
         

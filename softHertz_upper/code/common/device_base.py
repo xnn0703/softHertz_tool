@@ -1,16 +1,14 @@
 from abc import ABC, abstractmethod
 import queue
-from abc import ABC, abstractmethod
-from common.serial_controller import SerialController
 from common.protocol_base import ProtocolBase
 
 class DeviceBase(ABC):
     """设备抽象基类"""
     
-    def __init__(self, serial_controller: SerialController, protocol: ProtocolBase):
-        self.serial_controller = serial_controller
+    def __init__(self, communication_controller, protocol: ProtocolBase):
+        self.communication_controller = communication_controller
         self.protocol = protocol
-        self.serial_controller.received_data_callback = self.on_received_data
+        self.communication_controller.received_data_callback = self.on_received_data
         self.response_queue = queue.Queue()
     
     @abstractmethod
@@ -35,4 +33,4 @@ class DeviceBase(ABC):
     
     def is_connected(self) -> bool:
         """检查设备是否连接"""
-        return self.serial_controller.is_connected()
+        return self.communication_controller.is_connected()

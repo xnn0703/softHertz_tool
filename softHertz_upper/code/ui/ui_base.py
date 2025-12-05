@@ -80,7 +80,7 @@ class UIBase:
         # 设备类型选择区域
         self.device_type_label = ttk.Label(self.scrollable_frame, text="设备类型:")
         self.device_type_label.grid(row=0, column=0, padx=5, pady=5)
-        self.device_type_cb = ttk.Combobox(self.scrollable_frame, values=["KauDC004A", "AFD01_QS"], width=12)
+        self.device_type_cb = ttk.Combobox(self.scrollable_frame, values=["KauDC004A", "AFD01_QS", "DEBUG"], width=12)
         self.device_type_cb.grid(row=0, column=1, padx=5, pady=5)
         self.device_type_cb.set("KauDC004A")
         self.device_type_cb.bind("<<ComboboxSelected>>", self.on_device_type_changed)
@@ -121,8 +121,8 @@ class UIBase:
     
     def update_ports(self):
         """更新可用串口列表"""
-        if hasattr(self.device.serial_controller, 'update_ports'):
-            ports = self.device.serial_controller.update_ports()
+        if hasattr(self.device.communication_controller, 'update_ports'):
+            ports = self.device.communication_controller.update_ports()
             # 安全检查：确保port_cb仍然存在
             if hasattr(self, 'port_cb') and self.port_cb.winfo_exists():
                 current_port = self.port_cb.get()
@@ -140,8 +140,9 @@ class UIBase:
     
     def toggle_serial(self):
         """打开或关闭串口"""
-        if not hasattr(self.device.serial_controller, 'toggle_serial'):
-            messagebox.showerror("错误", "设备控制器不支持串口操作")
+        # 检查设备是否有communication_controller属性
+        if not hasattr(self.device, 'communication_controller'):
+            messagebox.showerror("错误", "设备控制器不支持通信操作")
             return
         
         port = self.port_cb.get()
@@ -151,18 +152,26 @@ class UIBase:
             messagebox.showwarning("警告", "请选择串口")
             return
         
-        success, msg = self.device.serial_controller.toggle_serial(port, baud_rate)
+        # 使用toggle_connection方法，兼容各种通信方式
+        if hasattr(self.device.communication_controller, 'toggle_connection'):
+            success, msg = self.device.communication_controller.toggle_connection(port, baud_rate)
+        elif hasattr(self.device.communication_controller, 'toggle_serial'):
+            # 兼容旧的toggle_serial方法
+            success, msg = self.device.communication_controller.toggle_serial(port, baud_rate)
+        else:
+            messagebox.showerror("错误", "设备控制器不支持连接操作")
+            return
         
         # 无论操作是打开还是关闭，都直接检查当前的连接状态来更新UI
         current_state = self.device.is_connected()
         
         if success:
-            self.connect_btn.config(text="关闭串口" if current_state else "打开串口")
+            self.connect_btn.config(text="关闭连接" if current_state else "打开连接")
             self.log_message(msg)
         else:
             # 发生错误时也更新UI状态
-            self.connect_btn.config(text="打开串口")
-            messagebox.showerror("串口错误", msg)
+            self.connect_btn.config(text="打开连接")
+            messagebox.showerror("连接错误", msg)
             
         # 强制更新UI以确保状态一致
         self.master.update_idletasks()
