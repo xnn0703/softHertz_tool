@@ -171,10 +171,15 @@ class DebugUI(UIBase):
         self.host_entry.grid(row=0, column=1, sticky="w", padx=5, pady=5)
         self.host_entry.insert(0, "127.0.0.1")
         
-        ttk.Label(self.network_frame, text="端口:").grid(row=0, column=2, sticky="w", padx=5, pady=5)
+        ttk.Label(self.network_frame, text="远程端口:").grid(row=0, column=2, sticky="w", padx=5, pady=5)
         self.port_entry = ttk.Entry(self.network_frame, width=10)
         self.port_entry.grid(row=0, column=3, sticky="w", padx=5, pady=5)
         self.port_entry.insert(0, "8080")
+        
+        ttk.Label(self.network_frame, text="本地端口:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        self.local_port_entry = ttk.Entry(self.network_frame, width=10)
+        self.local_port_entry.grid(row=1, column=1, sticky="w", padx=5, pady=5)
+        self.local_port_entry.insert(0, "8080")
         
         # 网络模式选择区域
         self.mode_frame = ttk.Frame(self.network_frame)
@@ -236,8 +241,7 @@ class DebugUI(UIBase):
         self.ax.set_xlabel('时间 (ms)')
         self.ax.set_ylabel('数值')
         self.ax.set_title('实时数据曲线')
-        # 固定图例位置为右上角
-        self.ax.legend(loc='upper right')
+        # 初始化时不创建图例，在添加第一个通道时再创建
         
         # 初始化blit背景
         self.blit_background = self.canvas_widget.copy_from_bbox(self.fig.bbox)
@@ -552,6 +556,8 @@ class DebugUI(UIBase):
         """打开或关闭通信连接"""
         success = False
         msg = ""
+        is_broadcast = False  # 初始化变量，避免未定义错误
+        port = ""  # 初始化port变量，避免未定义错误
         
         # 根据通信方式选择控制器
         if self.current_communication_mode == "serial":
@@ -602,14 +608,19 @@ class DebugUI(UIBase):
         elif self.current_communication_mode == "udp":
             # UDP模式
             host = self.host_entry.get()
-            port = self.port_entry.get()
+            remote_port = self.port_entry.get()
+            local_port = self.local_port_entry.get()
             
-            if not host or not port:
+            if not host or not remote_port:
                 messagebox.showwarning("警告", "请填写完整的网络配置")
                 return
             
             is_broadcast = self.net_mode_var.get() == "广播"
-            success, msg = self.udp_controller.toggle_connection(host, int(port), is_broadcast)
+            # 如果本地端口为空，则使用远程端口
+            if not local_port:
+                success, msg = self.udp_controller.toggle_connection(host, int(remote_port), None, is_broadcast)
+            else:
+                success, msg = self.udp_controller.toggle_connection(host, int(remote_port), int(local_port), is_broadcast)
             
             # 更新设备的通信控制器
             self.device.communication_controller = self.udp_controller

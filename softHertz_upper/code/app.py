@@ -77,6 +77,13 @@ class Application:
     
     def on_closing(self):
         """处理窗口关闭事件"""
+        # 清理UI资源，停止所有定时器
+        if self.ui:
+            try:
+                self.ui.destroy()
+            except Exception as e:
+                print(f"清理UI资源时出错: {e}")
+        
         # 关闭串口连接
         if self.serial_controller and self.serial_controller.is_connected():
             self.serial_controller.close()

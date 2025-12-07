@@ -13,7 +13,7 @@ class UDPController(CommunicationBase):
         self.is_broadcast = False
         self.current_device_type = "KauDC004A"  # 默认设备类型
         
-    def toggle_connection(self, host, port, is_broadcast_mode=False):
+    def toggle_connection(self, host, remote_port, local_port=None, is_broadcast_mode=False):
         """打开或关闭UDP连接"""
         if self.is_connected():
             self.close()
@@ -23,22 +23,25 @@ class UDPController(CommunicationBase):
                 self.is_broadcast = is_broadcast_mode
                 self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 
+                # 如果未指定本地端口，则使用远程端口
+                bind_port = int(local_port) if local_port else int(remote_port)
+                
                 if is_broadcast_mode:
                     # 广播模式
                     self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                    self.socket.bind(("0.0.0.0", int(port)))
-                    self.remote_address = (host, int(port))
+                    self.socket.bind(("0.0.0.0", bind_port))
+                    self.remote_address = (host, int(remote_port))
                 else:
                     # 单播模式
-                    self.socket.bind(("0.0.0.0", int(port)))
-                    self.remote_address = (host, int(port))
+                    self.socket.bind(("0.0.0.0", bind_port))
+                    self.remote_address = (host, int(remote_port))
                 
                 self.running = True
                 self.receive_thread = threading.Thread(target=self.read_thread, daemon=True)
                 self.receive_thread.start()
                 
                 mode_text = "广播" if is_broadcast_mode else "单播"
-                return True, f"UDP {mode_text}模式已启动，绑定端口 {port}"
+                return True, f"UDP {mode_text}模式已启动，绑定端口 {bind_port}"
             except Exception as e:
                 self.close()
                 return False, str(e)
