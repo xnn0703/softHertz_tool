@@ -95,11 +95,24 @@ class DebugProtocol(ProtocolBase):
                 channel_data = []
                 offset = 5
                 for i in range(channel_count):
-                    if offset + 4 > len(data):  # 每个通道数据占4字节(float)
+                    # 每个通道数据占32字节名称 + 4字节值
+                    if offset + 32 + 4 > len(data):
                         break
                     
                     # 提取通道名称(32字节)
-                    channel_name = data[offset:offset+32].decode('utf-8', errors='ignore').strip('\x00')
+                    channel_name_bytes = data[offset:offset+32]
+                    # 找到第一个空字节的位置
+                    null_pos = channel_name_bytes.find(b'\x00')
+                    if null_pos >= 0:
+                        # 只取空字节前的部分
+                        channel_name_bytes = channel_name_bytes[:null_pos]
+                    # 使用UTF-8编码（与设备端保持一致）
+                    channel_name = channel_name_bytes.decode('utf-8', errors='replace').strip()
+                    # 替换不可打印字符为下划线
+                    channel_name = ''.join(c if c.isprintable() else '_' for c in channel_name)
+                    # 如果通道名称为空，使用默认名称
+                    if not channel_name:
+                        channel_name = f'Channel{i+1}'
                     offset += 32
                     
                     # 提取通道数据(float，小端序)

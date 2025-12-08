@@ -34,9 +34,12 @@ class DebugDevice(DeviceBase):
         self.data_callback = None
     
     def on_received_data(self, data: bytearray):
-        """处理接收到的数据"""
+        """处理接收到的数据，并将解析结果存储到日志"""
         # 将新数据添加到缓冲区
         self.buffer.extend(data)
+        
+        # 记录原始接收到的数据
+        self.communication_controller.log(f"<<< 接收到数据: {data.hex(' ')}")
         
         # 持续解析缓冲区中的数据
         while len(self.buffer) >= 10:  # 最小帧长度：帧头(2) + 设备类型(1) + 命令(1) + 数据长度(2) + 校验和(2) + 帧尾(1)
@@ -44,11 +47,14 @@ class DebugDevice(DeviceBase):
             frame_start = self.buffer.find(b'\xAA\x55')
             if frame_start < 0:
                 # 没有找到帧头，清空缓冲区
+                self.communication_controller.log(f"[解析错误] 未找到帧头，清空缓冲区")
                 self.buffer.clear()
                 break
             
             # 移除帧头之前的无效数据
             if frame_start > 0:
+                invalid_data = bytes(self.buffer[:frame_start])
+                self.communication_controller.log(f"[解析错误] 帧头前有无效数据: {invalid_data.hex(' ')}")
                 self.buffer = self.buffer[frame_start:]
                 continue
             
@@ -77,16 +83,28 @@ class DebugDevice(DeviceBase):
                     if self.data_callback:
                         self.data_callback(extracted_data)
                     
-                    # 记录日志
-                    self.communication_controller.log(f"<<< 解析结果: {extracted_data.get('display_text', '未知数据')}")
+                    # 记录完整解析结果
+                    if 'channel_data' in extracted_data:
+                        # 构建更清晰的通道数据记录
+                        channel_info = []
+                        for channel in extracted_data['channel_data']:
+                            channel_info.append(f"{channel['name']}: {channel['value']:.2f}")
+                        channel_str = ', '.join(channel_info)
+                        self.communication_controller.log(f"<<< 解析成功: 时间戳={extracted_data['timestamp']}, 通道数={extracted_data['channel_count']}, 通道数据=[{channel_str}]")
+                    else:
+                        self.communication_controller.log(f"<<< 解析成功: {extracted_data}")
+                else:
+                    # 解析失败，记录帧数据
+                    self.communication_controller.log(f"[解析错误] {msg}，帧数据: {frame.hex(' ')}")
                 
                 # 移除已解析的帧
                 self.buffer = self.buffer[frame_end + 1:]
                 
             except Exception as e:
-                # 解析失败，移除当前帧头，继续查找下一个
-                self.communication_controller.log(f"[解析错误] {str(e)}")
-                self.buffer = self.buffer[2:]
+                # 解析失败，记录异常和帧数据
+                self.communication_controller.log(f"[解析异常] {str(e)}，帧数据: {frame.hex(' ')}")
+                # 移除当前帧，继续查找下一个
+                self.buffer = self.buffer[frame_end + 1:] if frame_end > 0 else self.buffer[2:]
     
     def _update_device_status(self, data):
         """更新设备状态信息"""
