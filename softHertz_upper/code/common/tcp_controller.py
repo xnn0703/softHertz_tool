@@ -13,6 +13,8 @@ class TCPController(CommunicationBase):
         self.server_socket = None
         self.client_address = None
         self.current_device_type = "KauDC004A"  # 默认设备类型
+        # 设置通信类型
+        self.comm_type = "tcp"
         
     def toggle_connection(self, host, port, is_server_mode=False):
         """打开或关闭TCP连接"""

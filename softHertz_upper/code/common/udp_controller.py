@@ -12,6 +12,8 @@ class UDPController(CommunicationBase):
         self.remote_address = None  # 远程地址，用于发送数据
         self.is_broadcast = False
         self.current_device_type = "KauDC004A"  # 默认设备类型
+        # 设置通信类型
+        self.comm_type = "udp"
         
     def toggle_connection(self, host, remote_port, local_port=None, is_broadcast_mode=False):
         """打开或关闭UDP连接"""
@@ -91,23 +93,20 @@ class UDPController(CommunicationBase):
     
     def read_thread(self):
         """读取UDP数据的线程"""
-        buffer = bytearray()
         while self.running:
             try:
                 if self.socket:
                     # 接收数据
                     data, addr = self.socket.recvfrom(1024)
                     if data:
-                        buffer.extend(data)
-                        
                         if not self.performance_test_mode:
                             line = f"<<< 接收: {data.hex().upper()} 来自 {addr}"
                             self.log(line)
                         
-                        # 触发回调
+                        # 触发回调，只传递新接收的数据，不累积buffer
                         if self.received_data_callback:
                             try:
-                                self.received_data_callback(bytearray(buffer))
+                                self.received_data_callback(bytearray(data))
                             except Exception as e:
                                 if not self.performance_test_mode:
                                     self.log(f"[回调错误] {str(e)}")

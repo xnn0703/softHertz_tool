@@ -46,20 +46,16 @@ class DebugUI(UIBase):
         # 初始时间，用于计算相对时间
         self.start_time = time.time()
         
-        # 测试功能相关变量
-        self.test_mode = False
-        self.test_timer = None
-        self.test_interval = 1  # 测试数据发送间隔（毫秒），1ms实现高频数据上报
-        
         # 自动流动状态管理
         self.auto_scroll = True  # 是否自动流动
         self.is_dragging = False  # 是否正在拖动
         
+        # 帧率控制
+        self.last_plot_time = 0  # 上次绘制时间
+        self.min_plot_interval = 10  # 最小绘制间隔（毫秒），平衡实时性和性能，限制最高100fps
+        
         # 键盘状态管理
         self.ctrl_pressed = False  # ctrl键是否按下
-        
-        # 测试数据生成计数器
-        self.test_counter = 0
         
         # 窗口大小变化节流相关变量
         self.resize_timer = None
@@ -207,11 +203,13 @@ class DebugUI(UIBase):
             self.tcp_client_rb.grid(row=0, column=0, sticky="w", padx=5, pady=5)
             self.tcp_server_rb.grid(row=0, column=1, sticky="w", padx=5, pady=5)
             self.net_mode_var.set("client")
+            self.log_message(f"TCP网络模式：客户端")
         elif self.current_communication_mode == "udp":
             # UDP模式：单播/广播
             self.udp_unicast_rb.grid(row=0, column=0, sticky="w", padx=5, pady=5)
             self.udp_broadcast_rb.grid(row=0, column=1, sticky="w", padx=5, pady=5)
             self.net_mode_var.set("unicast")
+            self.log_message(f"UDP网络模式：单播")
     
     def create_plot_area(self):
         """创建曲线绘制区域，只占据左侧空间"""
@@ -259,11 +257,6 @@ class DebugUI(UIBase):
         self.clear_data_btn = ttk.Button(channel_frame, text="清除数据", command=self.clear_data)
         self.clear_data_btn.grid(row=0, column=0, sticky="w", padx=5, pady=2)
         
-        # 测试功能开关
-        self.test_mode_var = tk.BooleanVar(value=False)
-        self.test_switch = ttk.Checkbutton(channel_frame, text="自动发送测试数据", variable=self.test_mode_var, command=self.toggle_test_mode)
-        self.test_switch.grid(row=0, column=1, sticky="w", padx=5, pady=2)
-        
         # 通道选择控制
         self.select_all_btn = ttk.Button(channel_frame, text="全选", command=self.select_all_channels)
         self.select_all_btn.grid(row=0, column=2, sticky="w", padx=5, pady=2)
@@ -306,118 +299,9 @@ class DebugUI(UIBase):
         # 设置滚动框架的权重
         scrollable_channel_frame.grid_columnconfigure(0, weight=1)
     
-    def toggle_test_mode(self):
-        """切换测试模式，自动发送测试数据"""
-        self.test_mode = self.test_mode_var.get()
-        
-        if self.test_mode:
-            self.log_message("开启自动发送测试数据")
-            self.send_test_data()
-        else:
-            self.log_message("关闭自动发送测试数据")
-            if self.test_timer:
-                self.master.after_cancel(self.test_timer)
-                self.test_timer = None
-    
-    def send_test_data(self):
-        """发送16通道测试数据进行曲线绘制测试"""
-        # 生成16通道测试数据，使用多种曲线样式
-        channel_data = []
-        
-        # 增加计数器
-        self.test_counter += 1
-        
-        for i in range(16):
-            channel_name = f"test{i+1}"
-            
-            # 根据通道索引选择不同的曲线类型
-            if i == 0:
-                # sin曲线
-                value = 50 + 30 * np.sin(self.test_counter * 0.01)
-            elif i == 1:
-                # cos曲线
-                value = 50 + 30 * np.cos(self.test_counter * 0.01)
-            elif i == 2:
-                # 方波
-                value = 80 if (self.test_counter % 200) < 100 else 20
-            elif i == 3:
-                # 三角波
-                t = self.test_counter % 200
-                if t < 100:
-                    value = 20 + (t / 100) * 60
-                else:
-                    value = 80 - ((t - 100) / 100) * 60
-            elif i == 4:
-                # S速度曲线 (S-curve)
-                t = self.test_counter % 200
-                # 使用简化的S曲线计算
-                t_norm = t / 200
-                value = 20 + 60 * (t_norm ** 2 * (3 - 2 * t_norm))
-            elif i == 5:
-                # PID曲线（模拟PID控制输出）
-                t = self.test_counter
-                error = np.sin(t * 0.01)
-                integral = np.sin(t * 0.005)
-                derivative = np.cos(t * 0.02)
-                value = 50 + 10 * error + 5 * integral + 2 * derivative
-            elif i == 6:
-                # 姿态角曲线（模拟欧拉角）
-                value = 45 + 45 * np.sin(self.test_counter * 0.005)
-            elif i == 7:
-                # 噪声曲线
-                value = 50 + np.random.normal(0, 5)
-            elif i == 8:
-                # 指数增长曲线
-                t = self.test_counter % 1000
-                value = 20 + (80 - 20) * (1 - np.exp(-t / 200))
-            elif i == 9:
-                # 指数衰减曲线
-                t = self.test_counter % 1000
-                value = 80 + (20 - 80) * (1 - np.exp(-t / 200))
-            elif i == 10:
-                # 双正弦叠加曲线
-                value = 50 + 20 * np.sin(self.test_counter * 0.01) + 10 * np.sin(self.test_counter * 0.03)
-            elif i == 11:
-                # 余弦衰减曲线
-                value = 50 + 30 * np.cos(self.test_counter * 0.01) * np.exp(-self.test_counter * 0.0001)
-            elif i == 12:
-                # 锯齿波
-                t = self.test_counter % 200
-                value = 20 + (t / 200) * 60
-            elif i == 13:
-                # 阶梯曲线
-                value = 20 + ((self.test_counter // 100) % 5) * 15
-            elif i == 14:
-                # 脉冲波
-                value = 80 if (self.test_counter % 100) == 0 else 20
-            elif i == 15:
-                # 复合曲线
-                value = 50 + 20 * np.sin(self.test_counter * 0.01) + 15 * np.cos(self.test_counter * 0.02) + 10 * np.sin(self.test_counter * 0.05)
-            else:
-                # 默认sin曲线
-                value = 50 + 30 * np.sin(self.test_counter * 0.01)
-            
-            channel_data.append({
-                'name': channel_name,
-                'value': value
-            })
-        
-        # 构造模拟数据
-        test_data = {
-            'timestamp': (time.time() - self.start_time) * 1000,
-            'channel_data': channel_data,
-            'channel_count': 16
-        }
-        
-        # 直接调用数据接收回调，绘制曲线
-        self.on_data_received(test_data)
-        
-        # 如果测试模式开启，继续发送测试数据
-        if self.test_mode:
-            self.test_timer = self.master.after(self.test_interval, self.send_test_data)
-    
     def select_all_channels(self):
         """全选所有通道"""
+        channel_count = len(self.channel_visibility)
         for var in self.channel_visibility.values():
             var.set(True)
         
@@ -426,9 +310,11 @@ class DebugUI(UIBase):
             line.set_visible(True)
         
         self.canvas_widget.draw()
+        self.log_message(f"已全选 {channel_count} 个通道")
     
     def select_none_channels(self):
         """全不选所有通道"""
+        channel_count = len(self.channel_visibility)
         for var in self.channel_visibility.values():
             var.set(False)
         
@@ -437,6 +323,7 @@ class DebugUI(UIBase):
             line.set_visible(False)
         
         self.canvas_widget.draw()
+        self.log_message(f"已全不选 {channel_count} 个通道")
     
     def create_debug_switch(self):
         """创建debug模式开关，减少与其他组件的间距"""
@@ -454,7 +341,19 @@ class DebugUI(UIBase):
     
     def on_comm_mode_changed(self):
         """处理通信方式变更"""
+        old_mode = self.current_communication_mode
         self.current_communication_mode = self.comm_mode_var.get()
+        
+        # 记录通信模式切换
+        self.log_message(f"通信模式切换：{old_mode} → {self.current_communication_mode}")
+        
+        # 清空数据缓冲区和缓存，确保不处理旧数据
+        self.data_buffer.clear()
+        self.data_cache.clear()
+        # 清除曲线
+        for line in self.lines.values():
+            line.set_data([], [])
+        self.canvas_widget.draw()
         
         # 关闭当前所有控制器的连接
         if self.serial_controller.is_connected():
@@ -500,7 +399,7 @@ class DebugUI(UIBase):
             elif self.current_communication_mode == "udp":
                 # UDP模式
                 self.connect_btn.config(text="连接")
-            
+        
         # 更新设备的通信控制器
         if self.current_communication_mode == "serial":
             self.device.communication_controller = self.serial_controller
@@ -569,6 +468,7 @@ class DebugUI(UIBase):
                 messagebox.showwarning("警告", "请选择串口")
                 return
             
+            self.log_message(f"尝试{self.connect_btn.cget('text')}：串口{port}，波特率{baud_rate}")
             success, msg = self.serial_controller.toggle_connection(port, baud_rate)
             
             # 更新设备的通信控制器
@@ -577,8 +477,10 @@ class DebugUI(UIBase):
             # 更新按钮文本
             if self.device.is_connected():
                 self.connect_btn.config(text="关闭串口")
+                self.log_message(f"串口连接成功：{port}，波特率{baud_rate}")
             else:
                 self.connect_btn.config(text="打开串口")
+                self.log_message(f"串口连接关闭：{port}")
         elif self.current_communication_mode == "tcp":
             # TCP模式
             host = self.host_entry.get()
@@ -589,6 +491,9 @@ class DebugUI(UIBase):
                 return
             
             is_server = self.net_mode_var.get() == "server"
+            mode_text = "服务器监听" if is_server else "客户端连接"
+            self.log_message(f"尝试{self.connect_btn.cget('text')}：TCP{mode_text}，{host}:{port}")
+            
             success, msg = self.tcp_controller.toggle_connection(host, int(port), is_server)
             
             # 更新设备的通信控制器
@@ -598,13 +503,17 @@ class DebugUI(UIBase):
             if self.device.is_connected():
                 if is_server:
                     self.connect_btn.config(text="停止监听")
+                    self.log_message(f"TCP服务器监听成功：{host}:{port}")
                 else:
                     self.connect_btn.config(text="断开连接")
+                    self.log_message(f"TCP客户端连接成功：{host}:{port}")
             else:
                 if is_server:
                     self.connect_btn.config(text="开始监听")
+                    self.log_message(f"TCP服务器监听关闭：{host}:{port}")
                 else:
                     self.connect_btn.config(text="连接")
+                    self.log_message(f"TCP客户端连接关闭：{host}:{port}")
         elif self.current_communication_mode == "udp":
             # UDP模式
             host = self.host_entry.get()
@@ -616,6 +525,10 @@ class DebugUI(UIBase):
                 return
             
             is_broadcast = self.net_mode_var.get() == "广播"
+            mode_text = "广播" if is_broadcast else "单播"
+            local_port_text = local_port if local_port else remote_port
+            self.log_message(f"尝试{self.connect_btn.cget('text')}：UDP{mode_text}，远程{host}:{remote_port}，本地端口{local_port_text}")
+            
             # 如果本地端口为空，则使用远程端口
             if not local_port:
                 success, msg = self.udp_controller.toggle_connection(host, int(remote_port), None, is_broadcast)
@@ -628,11 +541,25 @@ class DebugUI(UIBase):
             # 更新按钮文本
             if self.device.is_connected():
                 self.connect_btn.config(text="断开连接")
+                self.log_message(f"UDP{mode_text}连接成功：远程{host}:{remote_port}，本地端口{local_port_text}")
             else:
                 self.connect_btn.config(text="连接")
+                self.log_message(f"UDP{mode_text}连接关闭：远程{host}:{remote_port}，本地端口{local_port_text}")
         
         # 设置设备类型
         self.device.communication_controller.current_device_type = "DEBUG"
+        
+        # 检查连接状态，如果连接已关闭，清空数据缓冲区和缓存
+        if not self.device.is_connected():
+            # 调用设备的close方法，清空设备内部缓冲区和资源
+            self.device.close()
+            self.data_buffer.clear()
+            self.data_cache.clear()
+            # 清除曲线
+            for line in self.lines.values():
+                line.set_data([], [])
+            self.canvas_widget.draw()
+            self.log_message("连接已关闭，已清空所有数据缓冲区和缓存")
         
         if success:
             self.log_message(msg)
@@ -646,8 +573,19 @@ class DebugUI(UIBase):
         if 'channel_data' not in data:
             return
         
+        # 严格检查条件：必须开启DEBUG模式且设备连接
+        # 确保只处理当前连接的数据，避免处理断开连接后的旧数据
+        if not (self.debug_mode_var.get() and self.device.is_connected()):
+            # 如果是从缓冲区处理数据且连接已关闭，清空缓冲区
+            if from_buffer:
+                self.data_buffer.clear()
+            return
+        
         # 如果正在调整窗口大小且数据不是来自缓冲区，则将数据存入缓冲区
         if self.is_resizing and not from_buffer:
+            # 限制缓冲区大小，只保留最新的10条数据
+            if len(self.data_buffer) > 10:
+                self.data_buffer.pop(0)
             self.data_buffer.append(data.copy())
             return
         
@@ -675,8 +613,11 @@ class DebugUI(UIBase):
             # 更新通道数值表格
             self.update_channel_values(channel_name, value)
         
-        # 更新曲线，只有非缓冲区数据才立即更新，缓冲区数据在窗口调整完成后统一更新
-        self.update_plot()
+        # 只有在有数据到达时才绘制，同时限制最小绘制间隔为5ms
+        current_time = time.time() * 1000
+        if current_time - self.last_plot_time >= self.min_plot_interval:
+            self.update_plot()
+            self.last_plot_time = current_time
     
     def update_channel_values(self, channel_name, value):
         """更新通道数值表格"""
@@ -715,6 +656,8 @@ class DebugUI(UIBase):
         self.canvas_widget.draw()
         # 更新blit背景
         self.blit_background = self.canvas_widget.copy_from_bbox(self.fig.bbox)
+        # 记录日志
+        self.log_message(f"通道 {channel_name} 已添加到曲线")
     
     def add_channel_button(self, channel_name):
         """添加通道控制按钮"""
@@ -743,12 +686,16 @@ class DebugUI(UIBase):
             self.canvas_widget.draw()
             # 更新blit背景
             self.blit_background = self.canvas_widget.copy_from_bbox(self.fig.bbox)
+            # 记录日志
+            status = "显示" if visible else "隐藏"
+            self.log_message(f"通道 {channel_name} 已{status}")
     
     def on_mouse_press(self, event):
         """鼠标按下事件处理，暂停自动流动"""
         if event.button == 1:  # 左键按下
             self.is_dragging = True
             self.auto_scroll = False
+            self.log_message("曲线操作：暂停自动滚动")
     
     def on_mouse_release(self, event):
         """鼠标释放事件处理，检查是否恢复自动流动"""
@@ -760,6 +707,9 @@ class DebugUI(UIBase):
             # 如果当前X轴右边界接近最新数据，恢复自动流动
             if max_time > 0 and current_xlim[1] >= max_time - 100:  # 100ms的容差
                 self.auto_scroll = True
+                self.log_message("曲线操作：恢复自动滚动")
+            else:
+                self.log_message("曲线操作：保持手动滚动")
     
     def on_key_press(self, event):
         """键盘按键按下事件处理，跟踪ctrl键状态"""
@@ -798,11 +748,11 @@ class DebugUI(UIBase):
             # 重新绘制整个画布
             self.canvas_widget.draw()
             
-            # 处理缓冲区中的数据，补全未绘制的内容
+            # 处理缓冲区中的数据，只处理最新的数据，避免数据积压
             if self.data_buffer:
-                # 先处理所有缓冲数据
-                for data in self.data_buffer:
-                    self.on_data_received(data, from_buffer=True)
+                # 只处理最新的数据，忽略中间数据
+                latest_data = self.data_buffer[-1]
+                self.on_data_received(latest_data, from_buffer=True)
                 # 清空缓冲区
                 self.data_buffer.clear()
         except Exception as e:
@@ -868,56 +818,66 @@ class DebugUI(UIBase):
                 self.blit_background = self.canvas_widget.copy_from_bbox(self.fig.bbox)
     
     def update_plot(self):
-        """更新曲线绘制，使用普通绘制方式，确保每次绘制都有干净的背景"""
+        """更新曲线绘制，优化绘制效率"""
         if not self.data_cache:
             return
         
         # 初始化变量
         has_visible_data = False
-        all_timestamps = []
-        all_values = []
-        
-        # 只更新可见的曲线，减少计算量
         visible_lines = {}
+        latest_time = 0
+        
+        # 只处理可见的曲线，减少计算量
         for channel_name, line in self.lines.items():
             if line.get_visible() and channel_name in self.data_cache:
-                visible_lines[channel_name] = line
-                if self.data_cache[channel_name]:
-                    # 只收集可见曲线的数据
-                    timestamps, values = zip(*self.data_cache[channel_name])
-                    all_timestamps.extend(timestamps)
-                    all_values.extend(values)
+                channel_data = self.data_cache[channel_name]
+                if channel_data:
+                    visible_lines[channel_name] = line
                     has_visible_data = True
+                    # 只获取最新时间点，用于X轴范围计算
+                    latest_channel_time = channel_data[-1][0]
+                    if latest_channel_time > latest_time:
+                        latest_time = latest_channel_time
         
         if has_visible_data:
-            # 设置Y轴范围，留10%的边距
-            min_val = min(all_values)
-            max_val = max(all_values)
-            val_range = max_val - min_val
-            if val_range == 0:
-                val_range = 1  # 防止除以0
-            self.ax.set_ylim(min_val - val_range * 0.1, max_val + val_range * 0.1)
-            
-            # 根据auto_scroll状态决定是否自动流动
+            # 更新X轴范围，只使用最新的时间点
             if self.auto_scroll:
-                # 设置X轴范围，显示最近的10秒数据或所有数据
-                max_time = max(all_timestamps)
-                min_time = max(0, max_time - 10000)  # 显示最近10秒的数据，最小为0
-                self.ax.set_xlim(min_time, max_time)
-        else:
-            # 如果没有可见的数据，设置默认X轴范围
-            current_time = (time.time() - self.start_time) * 1000
-            self.ax.set_xlim(current_time - 1000, current_time)  # 默认显示最近1秒
+                min_time = max(0, latest_time - 10000)  # 显示最近10秒的数据
+                self.ax.set_xlim(min_time, latest_time)
+            
+            # 批量更新所有可见曲线的数据
+            update_needed = False
+            for channel_name, line in visible_lines.items():
+                channel_data = self.data_cache[channel_name]
+                if channel_data:
+                    # 直接解包最新数据，避免重复计算
+                    timestamps = [t for t, v in channel_data]
+                    values = [v for t, v in channel_data]
+                    line.set_data(timestamps, values)
+                    update_needed = True
+            
+            # 只在需要更新时才重新计算Y轴范围和绘制
+            if update_needed:
+                # 计算Y轴范围，只使用最新数据点
+                recent_values = []
+                for channel_name in visible_lines:
+                    channel_data = self.data_cache[channel_name]
+                    # 只使用最近的数据点来计算范围，减少计算量
+                    recent_points = channel_data[-50:]  # 减少到最近50个点
+                    recent_values.extend([v for t, v in recent_points])
+                
+                if recent_values:
+                    min_val = min(recent_values)
+                    max_val = max(recent_values)
+                    val_range = max_val - min_val
+                    if val_range == 0:
+                        val_range = 1  # 防止除以0
+                    
+                    new_min = min_val - val_range * 0.1
+                    new_max = max_val + val_range * 0.1
+                    self.ax.set_ylim(new_min, new_max)
         
-        # 更新可见曲线的数据
-        for channel_name, line in visible_lines.items():
-            if self.data_cache[channel_name]:
-                # 提取时间和数值
-                timestamps, values = zip(*self.data_cache[channel_name])
-                # 更新曲线数据
-                line.set_data(timestamps, values)
-        
-        # 使用普通绘制方式，每次都重绘整个画布，确保没有重影
+        # 使用普通绘制方式，避免blit相关错误
         self.canvas_widget.draw()
     
     def create_channel_values_display(self):
@@ -1024,9 +984,21 @@ class DebugUI(UIBase):
     def log_message(self, msg):
         """记录日志"""
         timestamp = time.strftime("[%Y-%m-%d %H:%M:%S] ")
-        self.log_text.insert(tk.END, timestamp + msg + "\n")
+        log_entry = timestamp + "[UI] " + msg + "\n"
+        
+        # 显示到UI
+        self.log_text.insert(tk.END, log_entry)
         self.log_text.see(tk.END)
         self.log_text.update_idletasks()
+        
+        # 写入到统一日志文件
+        try:
+            with open("log.txt", "a", encoding="utf-8") as f:
+                f.write(log_entry)
+                f.flush()
+        except Exception as e:
+            # 捕获异常，确保程序不会崩溃
+            pass
     
     def on_device_type_changed(self, event=None):
         """处理设备类型变更"""
@@ -1040,12 +1012,6 @@ class DebugUI(UIBase):
     
     def destroy(self):
         """清理资源"""
-        # 关闭测试模式
-        self.test_mode = False
-        if self.test_timer:
-            self.master.after_cancel(self.test_timer)
-            self.test_timer = None
-        
         # 关闭通信连接
         if self.device.is_connected():
             self.device.communication_controller.close()

@@ -7,12 +7,15 @@ class CommunicationBase:
     
     def __init__(self):
         self.running = False
-        self.logfile = open("communication_log.txt", "a", encoding="utf-8")
+        # 使用统一的日志文件
+        self.logfile = open("log.txt", "a", encoding="utf-8")
         self.response_queue = queue.Queue()
         self.received_data_callback = None
         self.receive_thread = None
         # 性能测试模式标志
         self.performance_test_mode = False
+        # 通信类型标志，由子类设置
+        self.comm_type = "base"
         
     def log(self, msg):
         """记录日志到文件"""
@@ -23,7 +26,7 @@ class CommunicationBase:
                 print(f"[日志] {msg}")
                 # 尝试重新打开日志文件
                 try:
-                    self.logfile = open("communication_log.txt", "a", encoding="utf-8")
+                    self.logfile = open("log.txt", "a", encoding="utf-8")
                     self.log(f"[系统] 重新打开了日志文件")
                 except:
                     pass
@@ -34,7 +37,8 @@ class CommunicationBase:
         
         try:
             ts = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S] ")
-            self.logfile.write(ts + msg + "\n")
+            # 添加通信类型tag
+            self.logfile.write(ts + f"[{self.comm_type}] " + msg + "\n")
             self.logfile.flush()
         except Exception as e:
             # 捕获所有可能的异常，确保程序不会崩溃

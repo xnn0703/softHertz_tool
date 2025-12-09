@@ -32,9 +32,17 @@ class DebugDevice(DeviceBase):
         
         # 数据回调函数，用于UI更新
         self.data_callback = None
+        
+        # 数据去重相关
+        self.last_timestamp = 0  # 记录最后处理的时间戳，用于去重
+        self.last_processed_data = None  # 记录最后处理的数据，用于去重
     
     def on_received_data(self, data: bytearray):
         """处理接收到的数据，并将解析结果存储到日志"""
+        # 严格检查连接状态：只有设备连接时才处理数据
+        if not self.communication_controller.is_connected():
+            return
+        
         # 将新数据添加到缓冲区
         self.buffer.extend(data)
         
@@ -58,17 +66,39 @@ class DebugDevice(DeviceBase):
                 self.buffer = self.buffer[frame_start:]
                 continue
             
-            # 检查帧尾
-            frame_end = self.buffer.find(b'\xEE')
-            if frame_end < 0:
-                # 没有找到完整的帧，等待更多数据
+            # 检查缓冲区长度是否足够读取基本帧信息
+            if len(self.buffer) < 10:
+                # 数据不足，等待更多数据
                 break
             
-            # 提取完整帧
-            frame = bytes(self.buffer[:frame_end + 1])
-            
-            # 解析帧
+            # 读取帧基本信息（不依赖帧尾）
             try:
+                # 帧结构：AA55 + 设备类型(1) + 命令(1) + 数据长度(2) + 数据 + 校验和(2) + EE
+                device_type = self.buffer[2]
+                command = self.buffer[3]
+                data_length = int.from_bytes(self.buffer[4:6], byteorder='little')
+                
+                # 计算完整帧长度
+                # 帧头(2) + 设备类型(1) + 命令(1) + 数据长度(2) + 数据(data_length) + 校验和(2) + 帧尾(1)
+                expected_frame_length = 2 + 1 + 1 + 2 + data_length + 2 + 1
+                
+                # 检查缓冲区是否包含完整帧
+                if len(self.buffer) < expected_frame_length:
+                    # 数据不足，等待更多数据
+                    break
+                
+                # 提取完整帧
+                frame = bytes(self.buffer[:expected_frame_length])
+                
+                # 检查帧尾
+                if not frame.endswith(b'\xEE'):
+                    # 帧尾错误，跳过当前帧
+                    self.communication_controller.log(f"[解析错误] 帧尾错误，预期EE，实际{frame[-1:].hex(' ')}，跳过当前帧")
+                    # 从缓冲区移除当前帧头，继续查找下一个帧头
+                    self.buffer = self.buffer[2:]
+                    continue
+                
+                # 解析帧
                 parsed_result, msg = self.protocol.parse_response(frame)
                 if parsed_result:
                     command, data_part = parsed_result
@@ -76,11 +106,22 @@ class DebugDevice(DeviceBase):
                     # 提取数据
                     extracted_data = self.protocol.extract_data(command, data_part)
                     
+                    # 数据去重：检查时间戳，避免重复处理相同数据
+                    if 'timestamp' in extracted_data:
+                        current_timestamp = extracted_data['timestamp']
+                        # 如果是相同的时间戳，跳过处理
+                        if current_timestamp <= self.last_timestamp:
+                            # 移除已解析的帧
+                            self.buffer = self.buffer[expected_frame_length:]
+                            continue
+                        # 更新最后处理的时间戳
+                        self.last_timestamp = current_timestamp
+                    
                     # 更新设备状态
                     self._update_device_status(extracted_data)
                     
                     # 调用数据回调函数
-                    if self.data_callback:
+                    if self.data_callback and 'channel_data' in extracted_data:
                         self.data_callback(extracted_data)
                     
                     # 记录完整解析结果
@@ -98,13 +139,14 @@ class DebugDevice(DeviceBase):
                     self.communication_controller.log(f"[解析错误] {msg}，帧数据: {frame.hex(' ')}")
                 
                 # 移除已解析的帧
-                self.buffer = self.buffer[frame_end + 1:]
+                self.buffer = self.buffer[expected_frame_length:]
                 
             except Exception as e:
                 # 解析失败，记录异常和帧数据
-                self.communication_controller.log(f"[解析异常] {str(e)}，帧数据: {frame.hex(' ')}")
-                # 移除当前帧，继续查找下一个
-                self.buffer = self.buffer[frame_end + 1:] if frame_end > 0 else self.buffer[2:]
+                self.communication_controller.log(f"[解析异常] {str(e)}")
+                # 从缓冲区移除当前帧头，继续查找下一个帧头
+                self.buffer = self.buffer[2:]
+                continue
     
     def _update_device_status(self, data):
         """更新设备状态信息"""
@@ -161,3 +203,15 @@ class DebugDevice(DeviceBase):
     def clear_history(self):
         """清除历史数据"""
         self.channel_data_history.clear()
+    
+    def close(self):
+        """关闭设备连接，清理资源"""
+        # 清空接收缓冲区
+        self.buffer.clear()
+        # 清除历史数据
+        self.clear_history()
+        # 确保回调不再被调用
+        self.data_callback = None
+        # 重置去重相关变量
+        self.last_timestamp = 0
+        self.last_processed_data = None

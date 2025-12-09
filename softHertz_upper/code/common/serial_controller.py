@@ -11,9 +11,8 @@ class SerialController(CommunicationBase):
         super().__init__()
         self.ser = None
         self.current_device_type = "KauDC004A"
-        # 重定向日志文件到serial_log.txt
-        self.logfile.close()
-        self.logfile = open("serial_log.txt", "a", encoding="utf-8")
+        # 设置通信类型
+        self.comm_type = "serial"
         
     def update_ports(self):
         """获取当前可用的串口列表"""
