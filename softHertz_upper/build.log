@@ -364,3 +364,47 @@
                    [--hide-console {minimize-late,hide-late,minimize-early,hide-early}]
                    [-i ...
 2025-12-10 15:28:21,869 - ERROR - ❌ 打包失败!
+2025-12-10 15:32:43,605 - INFO - === softHertz调试工具打包脚本 V2.0 ===
+2025-12-10 15:32:43,606 - INFO - 发布日期: 2025-10-01
+2025-12-10 15:32:43,815 - INFO - ✓ PyInstaller>=6.0.0 已安装
+2025-12-10 15:32:43,818 - INFO - ✓ PyQt5>=5.15.0 已安装
+2025-12-10 15:32:45,528 - INFO - ✓ pyqtgraph>=0.13.0 已安装
+2025-12-10 15:32:45,535 - INFO - ✓ pyserial>=3.5 已安装
+2025-12-10 15:32:45,536 - INFO - 开始清理旧的构建文件...
+2025-12-10 15:32:45,536 - INFO - 清理完成
+2025-12-10 15:32:45,536 - INFO - 执行打包命令: D:\pyqt5_env\Scripts\python.exe -m PyInstaller --noconfirm --onedir --windowed --name softHertzDebugTool --icon D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\soft_hertz_logo_deepspace_blue_512.ico --add-data D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\soft_hertz_logo_deepspace_blue_512.png;. --distpath D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist --workpath D:\1-project_upper\1.softHertz_upper\softHertz_upper\build --no-hooks-dir --hidden-import serial --hidden-import PyQt5.QtCore --hidden-import PyQt5.QtGui --hidden-import PyQt5.QtWidgets --hidden-import pyqtgraph --hidden-import PyQt5.sip --hidden-import PyQt5.QtPrintSupport --hidden-import PyQt5.QtNetwork D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\app.py
+2025-12-10 15:32:45,538 - INFO - 开始打包 softHertzDebugTool V2.0...
+2025-12-10 15:32:45,996 - ERROR - 打包失败! 耗时: 0.46秒
+2025-12-10 15:32:45,996 - ERROR - 错误代码: 2
+2025-12-10 15:32:45,997 - ERROR - 错误信息: usage: pyinstaller [-h] [-v] [-D] [-F] [--specpath DIR] [-n NAME]
+                   [--contents-directory CONTENTS_DIRECTORY]
+                   [--add-data SOURCE:DEST] [--add-binary SOURCE:DEST]
+                   [-p DIR] [--hidden-import MODULENAME]
+                   [--collect-submodules MODULENAME]
+                   [--collect-data MODULENAME] [--collect-binaries MODULENAME]
+                   [--collect-all MODULENAME] [--copy-metadata PACKAGENAME]
+                   [--recursive-copy-metadata PACKAGENAME]
+                   [--additional-hooks-dir HOOKSPATH]
+                   [--runtime-hook RUNTIME_HOOKS] [--exclude-module EXCLUDES]
+                   [--splash IMAGE_FILE]
+                   [-d {all,imports,bootloader,noarchive}] [--optimize LEVEL]
+                   [--python-option PYTHON_OPTION] [-s] [--noupx]
+                   [--upx-exclude FILE] [-c] [-w]
+                   [--hide-console {hide-early,minimize-early,hide-late,minimize-late}]
+                   [-i ...
+2025-12-10 15:32:45,999 - ERROR - ❌ 打包失败!
+2025-12-10 15:34:08,428 - INFO - === softHertz调试工具打包脚本 V2.0 ===
+2025-12-10 15:34:08,429 - INFO - 发布日期: 2025-10-01
+2025-12-10 15:34:08,600 - INFO - ✓ PyInstaller>=6.0.0 已安装
+2025-12-10 15:34:08,603 - INFO - ✓ PyQt5>=5.15.0 已安装
+2025-12-10 15:34:08,880 - INFO - ✓ pyqtgraph>=0.13.0 已安装
+2025-12-10 15:34:08,888 - INFO - ✓ pyserial>=3.5 已安装
+2025-12-10 15:34:08,888 - INFO - 开始清理旧的构建文件...
+2025-12-10 15:34:08,889 - INFO - 清理完成
+2025-12-10 15:34:08,890 - INFO - 执行打包命令: D:\pyqt5_env\Scripts\python.exe -m PyInstaller --noconfirm --onedir --windowed --name softHertzDebugTool --icon D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\soft_hertz_logo_deepspace_blue_512.ico --add-data D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\soft_hertz_logo_deepspace_blue_512.png;. --distpath D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist --workpath D:\1-project_upper\1.softHertz_upper\softHertz_upper\build --hidden-import serial --hidden-import PyQt5.QtCore --hidden-import PyQt5.QtGui --hidden-import PyQt5.QtWidgets --hidden-import pyqtgraph D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\app.py
+2025-12-10 15:34:08,891 - INFO - 开始打包 softHertzDebugTool V2.0...
+2025-12-10 15:35:37,170 - INFO - 打包成功! 耗时: 88.28秒
+2025-12-10 15:35:37,171 - INFO - 输出目录: D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist
+2025-12-10 15:35:37,171 - INFO - 可执行文件: D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist\softHertzDebugTool.exe
+2025-12-10 15:35:37,172 - INFO - ✅ 打包完成!
+2025-12-10 15:35:37,172 - INFO - 可执行文件位置: D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist\softHertzDebugTool.exe

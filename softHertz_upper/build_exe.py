@@ -139,11 +139,11 @@ def build_exe(args):
     if args.icon and not os.path.exists(args.icon):
         logger.warning(f"图标文件不存在: {args.icon}")
     
-    # 构建PyInstaller命令 - 使用简单模式，禁用钩子和复杂功能
+    # 构建PyInstaller命令 - 使用最简单的配置
     cmd = [
         sys.executable, '-m', 'PyInstaller',
         '--noconfirm',
-        '--onedir',  # 使用目录模式，避免路径问题
+        '--onedir',  # 使用目录模式
         '--windowed',  # 窗口模式
         '--name', args.name,
     ]
@@ -161,9 +161,6 @@ def build_exe(args):
     cmd.extend(['--distpath', args.distpath])
     cmd.extend(['--workpath', args.workpath])
     
-    # 禁用钩子系统，避免中文路径问题
-    cmd.append('--no-hooks-dir')
-    
     # 添加必要的隐藏导入
     hidden_imports = [
         'serial',
@@ -171,9 +168,6 @@ def build_exe(args):
         'PyQt5.QtGui',
         'PyQt5.QtWidgets',
         'pyqtgraph',
-        'PyQt5.sip',
-        'PyQt5.QtPrintSupport',
-        'PyQt5.QtNetwork',
     ]
     
     for imp in hidden_imports:
