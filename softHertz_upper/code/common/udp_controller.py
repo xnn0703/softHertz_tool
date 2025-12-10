@@ -25,6 +25,9 @@ class UDPController(CommunicationBase):
                 self.is_broadcast = is_broadcast_mode
                 self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 
+                # 设置UDP接收缓冲区大小为16KB，提高接收效率
+                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16384)
+                
                 # 如果未指定本地端口，则使用远程端口
                 bind_port = int(local_port) if local_port else int(remote_port)
                 
