@@ -32,7 +32,7 @@ def parse_args():
     parser.add_argument('--debug', action='store_true', help='启用调试模式')
     parser.add_argument('--console', action='store_true', default=False, help='显示控制台窗口')
     parser.add_argument('--onedir', action='store_true', default=False, help='生成目录模式的可执行文件')
-    parser.add_argument('--name', type=str, default='softHertzDebugTool', help='应用程序名称（建议使用英文）')
+    parser.add_argument('--name', type=str, default='softHertz调试工具', help='应用程序名称')
     parser.add_argument('--icon', type=str, default=os.path.join(project_dir, 'code', 'soft_hertz_logo_deepspace_blue_512.ico'), help='图标文件路径')
     parser.add_argument('--distpath', type=str, default=os.path.join(project_dir, 'dist'), help='输出目录')
     parser.add_argument('--workpath', type=str, default=os.path.join(project_dir, 'build'), help='工作目录')
@@ -128,7 +128,6 @@ def build_exe(args):
     # 定义文件路径
     main_script = os.path.join(project_dir, 'code', 'app.py')
     icon_file = args.icon
-    spec_file = os.path.join(project_dir, f'{args.name}.spec')
     
     # 检查主脚本是否存在
     if not os.path.exists(main_script):
@@ -139,13 +138,17 @@ def build_exe(args):
     if args.icon and not os.path.exists(args.icon):
         logger.warning(f"图标文件不存在: {args.icon}")
     
+    # 使用临时英文名称进行打包，避免中文编码问题
+    temp_name = 'softHertzTool'
+    spec_file = os.path.join(project_dir, f'{temp_name}.spec')
+    
     # 构建PyInstaller命令 - 使用最简单的配置
     cmd = [
         sys.executable, '-m', 'PyInstaller',
         '--noconfirm',
         '--onedir',  # 使用目录模式
         '--windowed',  # 窗口模式
-        '--name', args.name,
+        '--name', temp_name,
     ]
     
     # 添加图标
@@ -182,28 +185,32 @@ def build_exe(args):
     start_time = datetime.now()
     
     try:
-        result = subprocess.run(
+        # 不捕获输出，避免解码错误
+        subprocess.run(
             cmd, 
             check=True, 
-            cwd=project_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding='latin-1'  # 使用latin-1编码处理非UTF-8字符
+            cwd=project_dir
         )
         
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
         
         logger.info(f"打包成功! 耗时: {duration:.2f}秒")
-        logger.info(f"输出目录: {args.distpath}")
-        logger.info(f"可执行文件: {os.path.join(args.distpath, f'{args.name}.exe')}")
         
-        # 显示打包结果（限制输出长度）
-        if result.stdout:
-            # 只记录前1000个字符，避免日志过大
-            truncated_output = result.stdout[:1000] + "..." if len(result.stdout) > 1000 else result.stdout
-            logger.debug(f"打包输出: {truncated_output}")
+        # 打包成功后，将临时文件夹重命名为目标名称
+        temp_dir = os.path.join(args.distpath, temp_name)
+        target_dir = os.path.join(args.distpath, args.name)
+        
+        if os.path.exists(temp_dir):
+            # 如果目标目录已存在，先删除
+            if os.path.exists(target_dir):
+                shutil.rmtree(target_dir)
+            # 重命名文件夹
+            os.rename(temp_dir, target_dir)
+            logger.info(f"已将文件夹重命名为: {args.name}")
+        
+        logger.info(f"输出目录: {target_dir}")
+        logger.info(f"可执行文件: {os.path.join(target_dir, f'{temp_name}.exe')}")
         
         return True
         
@@ -213,40 +220,14 @@ def build_exe(args):
         
         logger.error(f"打包失败! 耗时: {duration:.2f}秒")
         logger.error(f"错误代码: {e.returncode}")
-        
-        # 显示错误输出（限制长度并使用latin-1解码）
-        if e.stdout:
-            truncated_stdout = e.stdout[:1000] + "..." if len(e.stdout) > 1000 else e.stdout
-            logger.error(f"打包输出: {truncated_stdout}")
-        
-        if e.stderr:
-            truncated_stderr = e.stderr[:1000] + "..." if len(e.stderr) > 1000 else e.stderr
-            logger.error(f"错误信息: {truncated_stderr}")
-        
         return False
-    except UnicodeDecodeError as e:
+    except Exception as e:
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
         
-        logger.error(f"打包过程中发生解码错误! 耗时: {duration:.2f}秒")
-        logger.error(f"解码错误: {e}")
-        logger.error("这通常是由于PyInstaller输出包含非UTF-8字符导致的")
-        
-        # 尝试使用不同的编码重新运行，不捕获输出
-        logger.info("尝试不捕获输出的方式重新运行...")
-        try:
-            subprocess.run(
-                cmd, 
-                check=True, 
-                cwd=project_dir
-            )
-            logger.info(f"打包成功! 耗时: {duration:.2f}秒")
-            logger.info(f"输出目录: {args.distpath}")
-            logger.info(f"可执行文件: {os.path.join(args.distpath, f'{args.name}.exe')}")
-            return True
-        except subprocess.CalledProcessError as e:
-            logger.error(f"重新运行也失败了: {e}")
-            return False
+        logger.error(f"打包过程中发生未知错误! 耗时: {duration:.2f}秒")
+        logger.error(f"错误信息: {e}")
+        return False
 
 
 def create_version_file():

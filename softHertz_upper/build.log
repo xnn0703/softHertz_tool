@@ -408,3 +408,132 @@
 2025-12-10 15:35:37,171 - INFO - 可执行文件: D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist\softHertzDebugTool.exe
 2025-12-10 15:35:37,172 - INFO - ✅ 打包完成!
 2025-12-10 15:35:37,172 - INFO - 可执行文件位置: D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist\softHertzDebugTool.exe
+2025-12-11 13:44:47,176 - INFO - === softHertz调试工具打包脚本 V2.0 ===
+2025-12-11 13:44:47,177 - INFO - 发布日期: 2025-10-01
+2025-12-11 13:44:47,633 - INFO - ✓ PyInstaller>=6.0.0 已安装
+2025-12-11 13:44:47,639 - INFO - ✓ PyQt5>=5.15.0 已安装
+2025-12-11 13:44:48,974 - INFO - ✓ pyqtgraph>=0.13.0 已安装
+2025-12-11 13:44:48,985 - INFO - ✓ pyserial>=3.5 已安装
+2025-12-11 13:44:48,985 - INFO - 开始清理旧的构建文件...
+2025-12-11 13:44:48,985 - INFO - 删除构建目录: D:\1-project_upper\1.softHertz_upper\softHertz_upper\build
+2025-12-11 13:44:48,990 - INFO - 删除输出目录: D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist
+2025-12-11 13:44:49,048 - INFO - 删除spec文件: D:\1-project_upper\1.softHertz_upper\softHertz_upper\softHertz调试工具.spec
+2025-12-11 13:44:49,048 - INFO - 清理完成
+2025-12-11 13:44:49,049 - INFO - 执行打包命令: C:\Users\徐亚彬\AppData\Local\Programs\Python\Python313\python.exe -m PyInstaller --noconfirm --onedir --windowed --name softHertz调试工具 --icon D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\soft_hertz_logo_deepspace_blue_512.ico --add-data D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\soft_hertz_logo_deepspace_blue_512.png;. --distpath D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist --workpath D:\1-project_upper\1.softHertz_upper\softHertz_upper\build --hidden-import serial --hidden-import PyQt5.QtCore --hidden-import PyQt5.QtGui --hidden-import PyQt5.QtWidgets --hidden-import pyqtgraph D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\app.py
+2025-12-11 13:44:49,050 - INFO - 开始打包 softHertz调试工具 V2.0...
+2025-12-11 13:45:06,244 - ERROR - 打包失败! 耗时: 17.19秒
+2025-12-11 13:45:06,244 - ERROR - 错误代码: 1
+2025-12-11 13:45:06,244 - ERROR - 错误信息: 742 INFO: PyInstaller: 6.14.1, contrib hooks: 2025.5
+743 INFO: Python: 3.13.5
+783 INFO: Platform: Windows-10-10.0.19045-SP0
+783 INFO: Python environment: C:\Users\ÐìÑÇ±ò\AppData\Local\Programs\Python\Python313
+784 INFO: wrote D:\1-project_upper\1.softHertz_upper\softHertz_upper\softHertzµ÷ÊÔ¹¤¾ß.spec
+810 INFO: Module search paths (PYTHONPATH):
+['D:\\1-project_upper\\1.softHertz_upper\\softHertz_upper',
+ 'C:\\Users\\ÐìÑÇ±ò\\AppData\\Local\\Programs\\Python\\Python313\\python313.zip',
+ 'C:\\Users\\ÐìÑÇ±ò\\AppData\\Local\\Programs\\Python\\Python313\\DLLs',
+ 'C:\\Users\\ÐìÑÇ±ò\\AppData\\Local\\Programs\\Python\\Python313\\Lib',
+ 'C:\\Users\\ÐìÑÇ±ò\\AppData\\Local\\Programs\\Python\\Python313',
+ 'C:\\Users\\ÐìÑÇ±ò\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages',
+ 'C:\\Users\\ÐìÑÇ±ò\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\setuptools\\_vendor',
+ 'D:\\1-project_upper\\1.softHertz_upper\\softHertz_upper\\code']
+1757 INFO: Appending 'datas' from .spec...
+2025-12-11 13:45:06,246 - ERROR - ❌ 打包失败!
+2025-12-11 13:45:13,836 - INFO - === softHertz调试工具打包脚本 V2.0 ===
+2025-12-11 13:45:13,837 - INFO - 发布日期: 2025-10-01
+2025-12-11 13:45:14,005 - INFO - ✓ PyInstaller>=6.0.0 已安装
+2025-12-11 13:45:14,009 - INFO - ✓ PyQt5>=5.15.0 已安装
+2025-12-11 13:45:14,364 - INFO - ✓ pyqtgraph>=0.13.0 已安装
+2025-12-11 13:45:14,372 - INFO - ✓ pyserial>=3.5 已安装
+2025-12-11 13:45:14,372 - INFO - 开始清理旧的构建文件...
+2025-12-11 13:45:14,372 - INFO - 删除构建目录: D:\1-project_upper\1.softHertz_upper\softHertz_upper\build
+2025-12-11 13:45:14,373 - INFO - 删除输出目录: D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist
+2025-12-11 13:45:14,373 - INFO - 删除spec文件: D:\1-project_upper\1.softHertz_upper\softHertz_upper\softHertz调试工具.spec
+2025-12-11 13:45:14,373 - INFO - 清理完成
+2025-12-11 13:45:14,374 - INFO - 执行打包命令: C:\Users\徐亚彬\AppData\Local\Programs\Python\Python313\python.exe -m PyInstaller --noconfirm --onedir --windowed --name softHertz调试工具 --icon D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\soft_hertz_logo_deepspace_blue_512.ico --add-data D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\soft_hertz_logo_deepspace_blue_512.png;. --distpath D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist --workpath D:\1-project_upper\1.softHertz_upper\softHertz_upper\build --hidden-import serial --hidden-import PyQt5.QtCore --hidden-import PyQt5.QtGui --hidden-import PyQt5.QtWidgets --hidden-import pyqtgraph D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\app.py
+2025-12-11 13:45:14,374 - INFO - 开始打包 softHertz调试工具 V2.0...
+2025-12-11 13:45:26,041 - ERROR - 打包失败! 耗时: 11.67秒
+2025-12-11 13:45:26,041 - ERROR - 错误代码: 1
+2025-12-11 13:45:26,042 - ERROR - 错误信息: 328 INFO: PyInstaller: 6.14.1, contrib hooks: 2025.5
+328 INFO: Python: 3.13.5
+386 INFO: Platform: Windows-10-10.0.19045-SP0
+386 INFO: Python environment: C:\Users\ÐìÑÇ±ò\AppData\Local\Programs\Python\Python313
+387 INFO: wrote D:\1-project_upper\1.softHertz_upper\softHertz_upper\softHertzµ÷ÊÔ¹¤¾ß.spec
+394 INFO: Module search paths (PYTHONPATH):
+['D:\\1-project_upper\\1.softHertz_upper\\softHertz_upper',
+ 'C:\\Users\\ÐìÑÇ±ò\\AppData\\Local\\Programs\\Python\\Python313\\python313.zip',
+ 'C:\\Users\\ÐìÑÇ±ò\\AppData\\Local\\Programs\\Python\\Python313\\DLLs',
+ 'C:\\Users\\ÐìÑÇ±ò\\AppData\\Local\\Programs\\Python\\Python313\\Lib',
+ 'C:\\Users\\ÐìÑÇ±ò\\AppData\\Local\\Programs\\Python\\Python313',
+ 'C:\\Users\\ÐìÑÇ±ò\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages',
+ 'C:\\Users\\ÐìÑÇ±ò\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\setuptools\\_vendor',
+ 'D:\\1-project_upper\\1.softHertz_upper\\softHertz_upper\\code']
+1123 INFO: Appending 'datas' from .spec...
+2025-12-11 13:45:26,044 - ERROR - ❌ 打包失败!
+2025-12-11 13:46:49,903 - INFO - === softHertz调试工具打包脚本 V2.0 ===
+2025-12-11 13:46:49,904 - INFO - 发布日期: 2025-10-01
+2025-12-11 13:46:50,084 - INFO - ✓ PyInstaller>=6.0.0 已安装
+2025-12-11 13:46:50,088 - INFO - ✓ PyQt5>=5.15.0 已安装
+2025-12-11 13:46:50,498 - INFO - ✓ pyqtgraph>=0.13.0 已安装
+2025-12-11 13:46:50,505 - INFO - ✓ pyserial>=3.5 已安装
+2025-12-11 13:46:50,506 - INFO - 开始清理旧的构建文件...
+2025-12-11 13:46:50,506 - INFO - 删除构建目录: D:\1-project_upper\1.softHertz_upper\softHertz_upper\build
+2025-12-11 13:46:50,507 - INFO - 删除输出目录: D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist
+2025-12-11 13:46:50,507 - INFO - 删除spec文件: D:\1-project_upper\1.softHertz_upper\softHertz_upper\softHertz调试工具.spec
+2025-12-11 13:46:50,508 - INFO - 清理完成
+2025-12-11 13:46:50,508 - INFO - 执行打包命令: C:\Users\徐亚彬\AppData\Local\Programs\Python\Python313\python.exe -m PyInstaller --noconfirm --onedir --windowed --name softHertzTemp --icon D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\soft_hertz_logo_deepspace_blue_512.ico --add-data D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\soft_hertz_logo_deepspace_blue_512.png;. --distpath D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist --workpath D:\1-project_upper\1.softHertz_upper\softHertz_upper\build --hidden-import serial --hidden-import PyQt5.QtCore --hidden-import PyQt5.QtGui --hidden-import PyQt5.QtWidgets --hidden-import pyqtgraph D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\app.py
+2025-12-11 13:46:50,509 - INFO - 开始打包 softHertz调试工具 V2.0...
+2025-12-11 13:47:01,562 - ERROR - 打包失败! 耗时: 11.05秒
+2025-12-11 13:47:01,562 - ERROR - 错误代码: 1
+2025-12-11 13:47:01,562 - ERROR - ❌ 打包失败!
+2025-12-11 13:47:26,800 - INFO - === softHertz调试工具打包脚本 V2.0 ===
+2025-12-11 13:47:26,801 - INFO - 发布日期: 2025-10-01
+2025-12-11 13:47:27,007 - INFO - ✓ PyInstaller>=6.0.0 已安装
+2025-12-11 13:47:27,011 - INFO - ✓ PyQt5>=5.15.0 已安装
+2025-12-11 13:47:27,488 - INFO - ✓ pyqtgraph>=0.13.0 已安装
+2025-12-11 13:47:27,504 - INFO - ✓ pyserial>=3.5 已安装
+2025-12-11 13:47:27,504 - INFO - 开始清理旧的构建文件...
+2025-12-11 13:47:27,505 - INFO - 删除构建目录: D:\1-project_upper\1.softHertz_upper\softHertz_upper\build
+2025-12-11 13:47:27,506 - INFO - 删除输出目录: D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist
+2025-12-11 13:47:27,507 - INFO - 清理完成
+2025-12-11 13:47:27,508 - INFO - 执行打包命令: C:\Users\徐亚彬\AppData\Local\Programs\Python\Python313\python.exe -m PyInstaller --noconfirm --onedir --windowed --name softHertzTemp --icon D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\soft_hertz_logo_deepspace_blue_512.ico --add-data D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\soft_hertz_logo_deepspace_blue_512.png;. --distpath D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist --workpath D:\1-project_upper\1.softHertz_upper\softHertz_upper\build --hidden-import serial --hidden-import PyQt5.QtCore --hidden-import PyQt5.QtGui --hidden-import PyQt5.QtWidgets --hidden-import pyqtgraph D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\app.py
+2025-12-11 13:47:27,509 - INFO - 开始打包 softHertz调试工具 V2.0...
+2025-12-11 13:47:39,587 - ERROR - 打包失败! 耗时: 12.08秒
+2025-12-11 13:47:39,587 - ERROR - 错误代码: 1
+2025-12-11 13:47:39,588 - ERROR - ❌ 打包失败!
+2025-12-11 13:48:20,986 - INFO - === softHertz调试工具打包脚本 V2.0 ===
+2025-12-11 13:48:20,986 - INFO - 发布日期: 2025-10-01
+2025-12-11 13:48:21,166 - INFO - ✓ PyInstaller>=6.0.0 已安装
+2025-12-11 13:48:21,169 - INFO - ✓ PyQt5>=5.15.0 已安装
+2025-12-11 13:48:23,071 - INFO - ✓ pyqtgraph>=0.13.0 已安装
+2025-12-11 13:48:23,081 - INFO - ✓ pyserial>=3.5 已安装
+2025-12-11 13:48:23,081 - INFO - 开始清理旧的构建文件...
+2025-12-11 13:48:23,081 - INFO - 删除构建目录: D:\1-project_upper\1.softHertz_upper\softHertz_upper\build
+2025-12-11 13:48:23,083 - INFO - 删除输出目录: D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist
+2025-12-11 13:48:23,083 - INFO - 清理完成
+2025-12-11 13:48:23,084 - INFO - 执行打包命令: D:\pyqt5_env\Scripts\python.exe -m PyInstaller --noconfirm --onedir --windowed --name softHertzTemp --icon D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\soft_hertz_logo_deepspace_blue_512.ico --add-data D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\soft_hertz_logo_deepspace_blue_512.png;. --distpath D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist --workpath D:\1-project_upper\1.softHertz_upper\softHertz_upper\build --hidden-import serial --hidden-import PyQt5.QtCore --hidden-import PyQt5.QtGui --hidden-import PyQt5.QtWidgets --hidden-import pyqtgraph D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\app.py
+2025-12-11 13:48:23,085 - INFO - 开始打包 softHertz调试工具 V2.0...
+2025-12-11 13:50:00,220 - INFO - 打包成功! 耗时: 97.13秒
+2025-12-11 13:50:00,221 - INFO - 已将文件夹重命名为: softHertz调试工具
+2025-12-11 13:50:00,221 - INFO - 输出目录: D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist\softHertz调试工具
+2025-12-11 13:50:00,222 - INFO - 可执行文件: D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist\softHertz调试工具\softHertzTemp.exe
+2025-12-11 13:50:00,223 - INFO - ✅ 打包完成!
+2025-12-11 13:50:00,223 - INFO - 可执行文件位置: D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist\softHertz调试工具.exe
+2025-12-11 13:50:49,681 - INFO - === softHertz调试工具打包脚本 V2.0 ===
+2025-12-11 13:50:49,681 - INFO - 发布日期: 2025-10-01
+2025-12-11 13:50:49,916 - INFO - ✓ PyInstaller>=6.0.0 已安装
+2025-12-11 13:50:49,923 - INFO - ✓ PyQt5>=5.15.0 已安装
+2025-12-11 13:50:50,240 - INFO - ✓ pyqtgraph>=0.13.0 已安装
+2025-12-11 13:50:50,251 - INFO - ✓ pyserial>=3.5 已安装
+2025-12-11 13:50:50,251 - INFO - 开始清理旧的构建文件...
+2025-12-11 13:50:50,252 - INFO - 删除构建目录: D:\1-project_upper\1.softHertz_upper\softHertz_upper\build
+2025-12-11 13:50:50,256 - INFO - 删除输出目录: D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist
+2025-12-11 13:50:50,302 - INFO - 清理完成
+2025-12-11 13:50:50,303 - INFO - 执行打包命令: D:\pyqt5_env\Scripts\python.exe -m PyInstaller --noconfirm --onedir --windowed --name softHertzTool --icon D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\soft_hertz_logo_deepspace_blue_512.ico --add-data D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\soft_hertz_logo_deepspace_blue_512.png;. --distpath D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist --workpath D:\1-project_upper\1.softHertz_upper\softHertz_upper\build --hidden-import serial --hidden-import PyQt5.QtCore --hidden-import PyQt5.QtGui --hidden-import PyQt5.QtWidgets --hidden-import pyqtgraph D:\1-project_upper\1.softHertz_upper\softHertz_upper\code\app.py
+2025-12-11 13:50:50,303 - INFO - 开始打包 softHertz调试工具 V2.0...
+2025-12-11 13:52:10,690 - INFO - 打包成功! 耗时: 80.39秒
+2025-12-11 13:52:10,691 - INFO - 已将文件夹重命名为: softHertz调试工具
+2025-12-11 13:52:10,692 - INFO - 输出目录: D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist\softHertz调试工具
+2025-12-11 13:52:10,692 - INFO - 可执行文件: D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist\softHertz调试工具\softHertzTool.exe
+2025-12-11 13:52:10,693 - INFO - ✅ 打包完成!
+2025-12-11 13:52:10,693 - INFO - 可执行文件位置: D:\1-project_upper\1.softHertz_upper\softHertz_upper\dist\softHertz调试工具.exe
