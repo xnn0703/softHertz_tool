@@ -40,7 +40,6 @@ class AFD01_QSProtocol(ProtocolBase):
             
             return frame
         except Exception as e:
-            print(f"构建帧失败: {e}")
             return None
     
     def parse_response(self, frame):
@@ -48,12 +47,10 @@ class AFD01_QSProtocol(ProtocolBase):
         try:
             # 检查帧是否为空或类型错误
             if not frame or not isinstance(frame, bytes):
-                print(f"[DEBUG] 无效的帧数据")
                 return None, "无效的帧数据"
                 
             # 检查帧头和最小长度（至少需要包含帧头+命令+长度+CRC = 6字节）
             if len(frame) < 6 or frame[0] != self.FRAME_HEADER:
-                print(f"[DEBUG] 无效的帧头或长度不足: {frame.hex().upper()}")
                 return None, "无效的帧头或长度不足"
             
             # 提取命令类型
@@ -61,25 +58,21 @@ class AFD01_QSProtocol(ProtocolBase):
             
             # 确保有足够的数据解析长度字段（至少需要frame[2:4]存在）
             if len(frame) < 4:
-                print(f"[DEBUG] 帧长度不足，无法解析数据长度: {frame.hex().upper()}")
                 return None, "帧长度不足，无法解析数据长度"
                 
             # 尝试提取数据长度（2字节，高字节先）
             try:
                 data_length = struct.unpack('>H', frame[2:4])[0]
             except struct.error as se:
-                print(f"[DEBUG] 解析数据长度失败: {frame.hex().upper()}, 错误: {str(se)}")
                 return None, f"解析数据长度失败: {str(se)}"
             
             # 数据长度合理性检查
             if data_length > 1024 or data_length < 0:
-                print(f"[DEBUG] 数据长度不合理: {data_length}, 帧数据: {frame.hex().upper()}")
                 return None, f"数据长度不合理: {data_length}"
             
             # 计算并检查完整帧长度
             total_frame_length = 5 + data_length  # 帧头(1)+命令(1)+长度(2)+数据(N)+CRC(2)
             if len(frame) < total_frame_length:
-                print(f"[DEBUG] 帧长度不足: 当前{len(frame)}字节, 需要{total_frame_length}字节, 帧数据: {frame.hex().upper()}")
                 return None, f"帧长度不足: 当前{len(frame)}字节, 需要{total_frame_length}字节"
 
             # 提取数据部分
@@ -91,19 +84,16 @@ class AFD01_QSProtocol(ProtocolBase):
             
             # 确保有足够的数据解析校验和
             if len(frame) < crc_end:
-                print(f"[DEBUG] 帧长度不足，无法解析校验和: 当前{len(frame)}字节, 需要{crc_end}字节, 帧数据: {frame.hex().upper()}")
                 return None, f"帧长度不足，无法解析校验和: 当前{len(frame)}字节, 需要{crc_end}字节"
                 
             # 尝试提取校验和（2字节，高字节先）
             crc_bytes = frame[crc_start:crc_end]
             if len(crc_bytes) != 2:
-                print(f"[DEBUG] 校验和字节不足: 预期2字节, 实际{len(crc_bytes)}字节, 帧数据: {frame.hex().upper()}")
                 return None, f"校验和字节不足: 预期2字节, 实际{len(crc_bytes)}字节"
                 
             try:
                 received_checksum = struct.unpack('>H', crc_bytes)[0]
             except struct.error as se:
-                print(f"[DEBUG] 解析校验和失败: {crc_bytes.hex().upper()}, 错误: {str(se)}")
                 return None, f"解析校验和失败: {str(se)}"
 
             # 计算校验和：指令(1字节) + 数据长度(2字节) + 数据内容
@@ -116,12 +106,10 @@ class AFD01_QSProtocol(ProtocolBase):
 
             # 检查校验和
             if received_checksum != calculated_checksum:
-                print(f"[DEBUG] 校验和失败: 帧数据: {frame.hex().upper()}")
                 return None, f"校验和失败，期望: {calculated_checksum:#04x}, 实际: {received_checksum:#04x}"
 
             return (command, data), "解析成功"
         except Exception as e:
-            print(f"[DEBUG] 解析失败: {frame.hex().upper()}")
             return None, f"解析失败: {str(e)}"
     
     def extract_data(self, command, data):
@@ -156,11 +144,9 @@ class AFD01_QSProtocol(ProtocolBase):
                     })
                     
             elif command == self.CMD_ANTENNA_STATUS_REPORT:
-                print(f"天线状态上报数据长度: {len(data)}")
                 # 解析天线状态上报帧（根据协议规范，数据长度为42字节）
                 # 为了兼容性，当数据长度大于等于42字节时也尝试解析
                 if len(data) >= 42:
-                    print(f"天线状态上报数据内容: {data.hex()}")
                     # 字节0: GPS锁定状态 (协议表格第5列)
                     gps_lock_status = "已锁定" if data[0] == 0x01 else "未锁定"
                     
@@ -248,29 +234,6 @@ class AFD01_QSProtocol(ProtocolBase):
                         "runtime": f"{runtime}s"
                     })
                     
-                    # 打印解析结果
-                    print("===== 天线状态上报数据解析结果 =====")
-                    print(f"GPS锁定状态: {gps_lock_status}")
-                    print(f"GPS经度: {gps_lng:.2f}°")
-                    print(f"GPS纬度: {gps_lat:.2f}°")
-                    print(f"GPS高度: {gps_alt}米")
-                    print(f"接收频点: {rx_freq:.2f} MHz")
-                    print(f"发射频点: {tx_freq:.2f} MHz")
-                    print(f"接收本振: {rx_lo:.2f} MHz")
-                    print(f"发射本振: {tx_lo:.2f} MHz")
-                    print(f"发射状态: {tx_enable}")
-                    print(f"极化方式: {polarization}")
-                    print(f"俯仰角: {pitch:.2f}°")
-                    print(f"横滚角: {roll:.2f}°")
-                    print(f"方位角: {heading:.2f}°")
-                    print(f"波束偏轴角: {beam_off_axis:.2f}°")
-                    print(f"波束航向角: {beam_heading:.2f}°")
-                    print(f"对星模式: {tracking_mode}")
-                    print(f"天线搜星状态: {antenna_search_status}")
-                    print(f"设备通讯状态: {comm_status}")
-                    print(f"ACU运行时间: {runtime}秒")
-                    print("====================================")
-                    
             elif command == self.CMD_SEARCH_PARAM:
                 # 解析搜星参数设置响应
                 if len(data) >= 1:
@@ -321,7 +284,7 @@ class AFD01_QSProtocol(ProtocolBase):
                     })
                     
         except Exception as e:
-            print(f"提取数据失败: {e}")
+            pass
         
         return result if result else None
     

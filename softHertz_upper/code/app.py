@@ -156,6 +156,8 @@ class Application(QMainWindow):
         # 添加UI组件到布局
         if self.ui:
             self.main_layout.addWidget(self.ui)
+            # 设置设备类型，确保UI显示正确
+            self.ui.set_device_type(device_type)
         
         # 设置窗口标题
         self.setWindowTitle(f"softHertz串口调试工具 - {device_type}")

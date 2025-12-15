@@ -123,7 +123,7 @@ class QBaseUI(QWidget):
             self.ui_update_timer.stop()
         self.ui_update_timer = QTimer(self)
         self.ui_update_timer.timeout.connect(self.update_ui)
-        self.ui_update_timer.start(100)
+        self.ui_update_timer.start(100)  # 将UI更新间隔从50ms改为100ms，减少UI卡顿
         
     @pyqtSlot(str)
     def on_device_type_changed(self, device_type):
@@ -188,8 +188,11 @@ class QBaseUI(QWidget):
             self.port_cb.clear()
             self.port_cb.addItems(ports)
             
-            # 如果当前选择的串口不可用，选择第一个可用串口
-            if current_port not in ports and ports:
+            # 如果当前选择的串口仍然可用，保持当前选择
+            if current_port in ports:
+                self.port_cb.setCurrentText(current_port)
+            # 否则，如果有可用串口，选择第一个
+            elif ports:
                 self.port_cb.setCurrentText(ports[0])
         
         # 安排下一次更新
