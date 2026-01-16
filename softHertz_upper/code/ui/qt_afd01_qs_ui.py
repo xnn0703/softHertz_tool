@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
     QFrame, QScrollArea, QSplitter, QMessageBox, QComboBox,
     QTableWidget, QTableWidgetItem, QStatusBar
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSlot, pyqtSignal, QObject, QEventLoop
+from PyQt5.QtCore import Qt, QTimer, pyqtSlot, pyqtSignal, QObject, QEventLoop, QMetaObject
 from PyQt5.QtGui import QFont, QColor
 from ui.qt_base_ui import QBaseUI
 
@@ -17,10 +17,25 @@ class QAFD01_QS_UI(QBaseUI):
     def __init__(self, parent=None, device=None):
         super().__init__(parent, device)
         
+        # 停止并删除基类的UI更新定时器，避免冲突
+        if hasattr(self, 'ui_update_timer') and self.ui_update_timer:
+            self.ui_update_timer.stop()
+            self.ui_update_timer.deleteLater()
+            self.ui_update_timer = None
+        
         # 性能测试状态跟踪
         self.test_running = False
         self.test_thread = None
         self.test_stop_event = None
+        
+        # UI更新控制
+        self.update_timer = QTimer(self)
+        self.update_timer.setInterval(100)  # 设置100ms更新一次
+        self.has_new_data = False  # 数据更新标志位
+        
+        # 连接定时器的timeout信号到定期更新UI的方法
+        self.update_timer.timeout.connect(self._update_ui_periodically)
+        self.update_timer.start()  # 启动定时器
         
         # 创建设备特定的UI组件
         self.create_specific_widgets()
@@ -30,11 +45,21 @@ class QAFD01_QS_UI(QBaseUI):
     
     def _connect_device_signal(self, device):
         """连接设备数据更新信号"""
-        # 注释掉数据更新信号连接，避免UI频繁更新导致卡顿
-        # 只依赖定时器进行UI更新，提高性能
-        # if device and hasattr(device, 'data_signal'):
-        #     # 连接数据更新信号到UI更新槽函数
-        #     device.data_signal.data_updated.connect(self.update_ui, Qt.QueuedConnection)
+        if device and hasattr(device, 'data_signal'):
+            # 连接数据更新信号到数据更新槽函数，只设置标志位，不立即更新UI
+            device.data_signal.data_updated.connect(self._data_updated_slot, Qt.QueuedConnection)
+    
+    def _data_updated_slot(self):
+        """数据更新槽函数，只设置标志位"""
+        self.has_new_data = True
+    
+    def _update_ui_periodically(self):
+        """定期更新UI，每隔100ms调用一次"""
+        if self.has_new_data:
+            # 调用原有update_ui方法更新UI
+            self.update_ui()
+            # 重置数据更新标志位
+            self.has_new_data = False
     
     def create_specific_widgets(self):
         """创建特定于AFD01_QS设备的UI组件"""
@@ -567,6 +592,15 @@ class QAFD01_QS_UI(QBaseUI):
                 self.log_message("[错误] 设备未连接，无法开始性能测试")
                 return
             
+            # 确保之前的测试已经停止
+            if hasattr(self, 'test_running') and self.test_running:
+                self.log_message("[错误] 上一次测试尚未结束，请先停止")
+                return
+            
+            # 清除之前的测试结果
+            if hasattr(self, '_test_result'):
+                del self._test_result
+            
             # 启用性能测试模式
             if hasattr(self.device, 'serial_controller'):
                 self.device.serial_controller.performance_test_mode = True
@@ -600,10 +634,59 @@ class QAFD01_QS_UI(QBaseUI):
             self.test_thread.daemon = True
             self.test_thread.start()
             
+            # 添加测试线程状态监控，确保线程能正常结束
+            def monitor_test_thread():
+                """监控测试线程状态"""
+                if hasattr(self, 'test_thread') and self.test_thread and self.test_thread.is_alive():
+                    # 检查测试是否超时
+                    elapsed_time = (time.time() - self.test_start_time) * 1000
+                    if elapsed_time > self.test_timeout * 2:  # 允许两倍超时时间
+                        self.log_message(f"[性能测试] 测试已超时，强制终止，已运行{elapsed_time/1000:.2f}s")
+                        self._force_stop_test()
+                    else:
+                        # 继续监控
+                        QTimer.singleShot(500, monitor_test_thread)
+                
+            # 启动监控
+            QTimer.singleShot(500, monitor_test_thread)
+            
         except ValueError as e:
             self.log_message(f"[错误] 参数格式错误: {str(e)}")
         except Exception as e:
             self.log_message(f"[错误] 开始测试失败: {str(e)}")
+    
+    def _force_stop_test(self):
+        """强制停止测试"""
+        """强制停止测试"""
+        try:
+            self.log_message("[性能测试] 执行强制停止")
+            
+            # 设置停止事件
+            if hasattr(self, 'test_stop_event') and self.test_stop_event:
+                self.test_stop_event.set()
+            
+            # 立即重置test_running标志
+            if hasattr(self, 'test_running'):
+                self.test_running = False
+            
+            # 禁用性能测试模式
+            if hasattr(self.device, 'serial_controller'):
+                self.device.serial_controller.performance_test_mode = False
+            
+            # 清除测试线程引用
+            if hasattr(self, 'test_thread'):
+                self.test_thread = None
+            
+            # 更新UI状态
+            self.test_status_var = "完成"
+            self.test_status_label.setText(self.test_status_var)
+            self.test_status_label.setStyleSheet("color: green")
+            self.start_test_btn.setEnabled(True)
+            self.stop_test_btn.setEnabled(False)
+            
+            self.log_message("[性能测试] 强制停止完成")
+        except Exception as e:
+            self.log_message(f"[错误] 强制停止测试失败: {str(e)}")
     
     @pyqtSlot()
     def stop_performance_test(self):
@@ -647,26 +730,61 @@ class QAFD01_QS_UI(QBaseUI):
         total_time_ms = 0
         success = True
         error_msg = ""
+        actual_count = 0  # 实际发送次数
+        test_start_time = time.perf_counter()
+        
+        # 预计算间隔时间（毫秒转秒）
+        target_interval = interval / 1000.0
+        
+        # 复用params字典（减少内存分配）
+        params = {'pitch': 0.0, 'heading': 0.0}
+        
+        # 获取测试类型
+        test_type = self.test_type_combo.currentText()
+        
+        # 确保UI状态正确更新
+        def update_ui_status(status, total_time=0):
+            """在主线程中更新UI状态"""
+            def do_update():
+                # 直接操作UI组件，确保状态正确
+                self.test_status_var = status
+                self.test_status_label.setText(self.test_status_var)
+                if status == "运行中":
+                    self.test_status_label.setStyleSheet("color: red")
+                elif status == "完成":
+                    self.test_status_label.setStyleSheet("color: green")
+                else:
+                    self.test_status_label.setStyleSheet("color: orange")
+                # 确保总耗时被正确更新
+                self.total_time_var = str(total_time)
+                self.total_time_label.setText(self.total_time_var)
+            # 使用QTimer.singleShot确保在主线程中执行
+            QTimer.singleShot(0, do_update)
+        
+        # 确保测试结果被正确保存和使用
+        test_result = {
+            'success': success,
+            'total_time_ms': total_time_ms,
+            'interval': interval,
+            'count': count,
+            'actual_count': actual_count,
+            'error_msg': error_msg
+        }
         
         try:
-            # 记录开始时间（使用更精确的perf_counter）
-            start_time = time.perf_counter()
-            
-            # 预计算间隔时间（毫秒转秒）
-            target_interval = interval / 1000.0
-            
-            # 复用params字典（减少内存分配）
-            params = {'pitch': 0.0, 'heading': 0.0}
-            
-            # 获取测试类型
-            test_type = self.test_type_combo.currentText()
-            
             # 循环发送N次指令，根据测试类型发送不同命令
             for i in range(count):
+                actual_count = i + 1  # 更新实际发送次数
+                
                 # 检查是否需要停止测试
                 if hasattr(self, 'test_stop_event') and self.test_stop_event and self.test_stop_event.is_set():
-                    # 只在停止时记录一次日志
-                    self.log_message("[性能测试] 测试已停止")
+                    self.log_message(f"[性能测试] 测试已停止，实际发送{actual_count}次")
+                    break
+                
+                # 检查测试是否超时
+                elapsed_time = (time.perf_counter() - test_start_time) * 1000
+                if elapsed_time > self.test_timeout:
+                    self.log_message(f"[性能测试] 测试超时，已运行{elapsed_time:.0f}ms，停止测试")
                     break
                 
                 # 交替使用0°和30°角度（优化计算）
@@ -679,14 +797,31 @@ class QAFD01_QS_UI(QBaseUI):
                 # 记录当前循环开始时间
                 loop_start = time.perf_counter()
                 
+                # 更新UI状态，显示当前进度
+                update_ui_status("运行中", int((time.perf_counter() - test_start_time) * 1000))
+                
                 # 发送命令，并检查返回结果
-                success_flag, msg = self.device.send_command(test_type, params)
-                if not success_flag and hasattr(self, 'test_stop_event') and not self.test_stop_event.is_set():
-                    # 只在第一次失败时记录日志，避免日志过多
-                    if i == 0:
-                        self.log_message(f"[性能测试] 发送命令失败: {msg}")
+                try:
+                    # 检查设备连接状态
+                    if not self.device or not self.device.serial_controller.is_connected():
+                        self.log_message("[性能测试] 设备连接已断开")
+                        success = False
+                        error_msg = "设备连接已断开"
+                        break
+                    
+                    success_flag, msg = self.device.send_command(test_type, params)
+                    if not success_flag and hasattr(self, 'test_stop_event') and not self.test_stop_event.is_set():
+                        # 只在第一次失败时记录日志，避免日志过多
+                        if i == 0:
+                            self.log_message(f"[性能测试] 发送命令失败: {msg}")
+                        success = False
+                        error_msg = msg
+                        break
+                except Exception as e:
+                    # 捕获发送命令时的异常，确保测试能继续执行
                     success = False
-                    error_msg = msg
+                    error_msg = f"发送命令异常: {str(e)}"
+                    self.log_message(f"[性能测试] 发送命令异常: {str(e)}")
                     break
                 
                 # 等待指定间隔（最后一次发送后不等待）
@@ -697,65 +832,115 @@ class QAFD01_QS_UI(QBaseUI):
                     wait_time = target_interval - elapsed
                     # 如果计算的等待时间为正，则等待相应时间
                     if wait_time > 0:
-                        time.sleep(wait_time)
+                        try:
+                            # 使用非阻塞的等待方式，每隔100ms检查一次停止事件
+                            wait_end_time = time.perf_counter() + wait_time
+                            while time.perf_counter() < wait_end_time:
+                                if hasattr(self, 'test_stop_event') and self.test_stop_event and self.test_stop_event.is_set():
+                                    self.log_message(f"[性能测试] 测试已停止，实际发送{actual_count}次")
+                                    break
+                                time.sleep(0.1)  # 100ms检查一次
+                        except Exception as e:
+                            # 捕获睡眠异常，确保测试能继续执行
+                            self.log_message(f"[性能测试] 等待异常: {str(e)}")
+                            break
             
             # 计算总耗时（使用perf_counter获取更精确的时间）
             end_time = time.perf_counter()
-            total_time_ms = int((end_time - start_time) * 1000)
+            total_time_ms = int((end_time - test_start_time) * 1000)
             
         except Exception as e:
             # 处理异常
             success = False
             error_msg = str(e)
+            end_time = time.perf_counter()
+            total_time_ms = int((end_time - test_start_time) * 1000)
             self.log_message(f"[性能测试] 测试异常: {error_msg}")
         finally:
-            # 无论测试成功还是失败，都要禁用性能测试模式
-            if hasattr(self.device, 'serial_controller'):
-                self.device.serial_controller.performance_test_mode = False
-            
-            # 确保test_running标志被正确重置
-            if hasattr(self, 'test_running'):
-                self.test_running = False
-            
-            # 确保测试线程引用被清除
-            if hasattr(self, 'test_thread'):
-                self.test_thread = None
-            
-            # 批量更新UI，减少UI刷新次数
-            def update_ui():
-                try:
-                    if success:
-                        self.test_status_var = "完成"
-                        self.test_status_label.setText(self.test_status_var)
+            # 确保在所有情况下都能正确清理
+            try:
+                # 无论测试成功还是失败，都要禁用性能测试模式
+                if hasattr(self.device, 'serial_controller'):
+                    self.device.serial_controller.performance_test_mode = False
+                
+                # 立即重置test_running标志，确保状态一致
+                if hasattr(self, 'test_running'):
+                    self.test_running = False
+                
+                # 更新测试结果
+                test_result.update({
+                    'success': success,
+                    'total_time_ms': total_time_ms,
+                    'actual_count': actual_count,
+                    'error_msg': error_msg
+                })
+                
+                # 保存测试结果到实例变量
+                self._test_result = test_result.copy()
+                
+                # 确保UI状态被正确更新
+                final_status = "完成" if (success and actual_count == count) else "异常"
+                
+                # 使用多重UI更新机制，确保状态可靠更新
+                def update_ui_final():
+                    # 强制更新UI状态
+                    self.test_status_var = final_status
+                    self.test_status_label.setText(self.test_status_var)
+                    if final_status == "完成":
                         self.test_status_label.setStyleSheet("color: green")
-                        self.total_time_var = str(total_time_ms)
-                        self.total_time_label.setText(self.total_time_var)
-                        
-                        # 只在测试成功完成时记录日志
-                        self.log_message(f"[性能测试] 测试完成，总耗时: {total_time_ms}ms")
-                        self.log_message(f"[性能测试] 平均间隔: {total_time_ms / count:.2f}ms/次")
-                        self.log_message(f"[性能测试] 目标间隔: {interval}ms")
                     else:
-                        self.test_status_var = "异常"
-                        self.test_status_label.setText(self.test_status_var)
-                        self.test_status_label.setStyleSheet("color: red")
+                        self.test_status_label.setStyleSheet("color: orange")
+                    
+                    # 强制更新总耗时
+                    self.total_time_var = str(total_time_ms)
+                    self.total_time_label.setText(self.total_time_var)
                     
                     # 恢复按钮状态
                     self.start_test_btn.setEnabled(True)
                     self.stop_test_btn.setEnabled(False)
-                except Exception as e:
-                    # 防止UI更新时出现异常导致状态无法恢复
-                    print(f"[DEBUG] UI更新异常: {e}")
-                    # 强制恢复按钮状态
+                
+                # 使用QTimer.singleShot在主线程中更新UI，避免QMetaObject.invokeMethod的嵌套函数问题
+                QTimer.singleShot(0, update_ui_final)
+                QTimer.singleShot(50, update_ui_final)   # 50ms后再次更新
+                QTimer.singleShot(100, update_ui_final)  # 100ms后再次确认更新
+                
+                # 记录最终结果
+                if success and actual_count == count:
+                    self.log_message(f"[性能测试] 测试完成，总耗时: {total_time_ms}ms")
+                    self.log_message(f"[性能测试] 平均间隔: {total_time_ms / actual_count:.2f}ms/次")
+                    self.log_message(f"[性能测试] 目标间隔: {interval}ms")
+                    self.log_message(f"[性能测试] 实际发送: {actual_count}次")
+                elif error_msg:
+                    self.log_message(f"[性能测试] 测试异常: {error_msg}")
+                    self.log_message(f"[性能测试] 实际发送: {actual_count}次")
+                else:
+                    self.log_message(f"[性能测试] 测试提前结束，总耗时: {total_time_ms}ms")
+                    self.log_message(f"[性能测试] 实际发送: {actual_count}次")
+                
+                # 清除测试线程引用
+                if hasattr(self, 'test_thread'):
+                    self.test_thread = None
+                
+                # 再次强制更新UI状态，确保万无一失
+                QTimer.singleShot(50, lambda: update_ui_status(final_status, total_time_ms))
+                QTimer.singleShot(100, lambda: update_ui_status(final_status, total_time_ms))
+                
+            except Exception as e:
+                # 终极防御，确保不会崩溃
+                self.log_message(f"[性能测试] 清理资源时出错: {str(e)}")
+                # 强制恢复按钮状态
+                def force_reset():
+                    if hasattr(self, 'test_running'):
+                        self.test_running = False
                     self.start_test_btn.setEnabled(True)
                     self.stop_test_btn.setEnabled(False)
-            
-            # 使用QTimer.singleShot在主线程中更新UI，尝试多次确保更新
-            QTimer.singleShot(0, update_ui)
-            # 添加一个额外的延迟更新，确保UI能正确更新
-            QTimer.singleShot(50, update_ui)
-            # 添加第三次更新，确保在所有情况下都能更新UI
-            QTimer.singleShot(100, update_ui)
+                    # 直接更新UI组件
+                    self.test_status_var = "异常"
+                    self.test_status_label.setText(self.test_status_var)
+                    self.test_status_label.setStyleSheet("color: red")
+                    self.total_time_var = "0"
+                    self.total_time_label.setText(self.total_time_var)
+                QTimer.singleShot(0, force_reset)
     
     def update_ui(self):
         """更新UI显示"""
@@ -824,11 +1009,23 @@ class QAFD01_QS_UI(QBaseUI):
                     display_text = ""
                     
                     # 根据不同类型进行格式化
-                    if isinstance(value, (int, float)):
+                    if info_key in ["runtime"]:  # ACU运行时间，特殊处理
+                        try:
+                            # 处理可能的字符串格式，如"159s"
+                            if isinstance(value, str):
+                                # 提取数字部分
+                                value_num = int(value.split('s')[0])
+                                display_text = f"{value_num}s"
+                            elif isinstance(value, (int, float)):  # 数字类型
+                                display_text = f"{int(value)}s"
+                            else:  # 其他类型，直接显示
+                                display_text = str(value)
+                        except (ValueError, AttributeError):
+                            # 转换失败，显示N/A
+                            display_text = "N/A"
+                    elif isinstance(value, (int, float)):
                         # 根据字段类型进行不同的格式化
-                        if info_key in ["runtime"]:  # ACU运行时间，以秒为单位，直接显示整数
-                            display_text = f"{int(value)}s"
-                        elif info_key in ["gps_lng", "gps_lat", "pitch", "roll", "heading", "beam_off_axis", "beam_heading"]:  # 角度类，保留2位小数
+                        if info_key in ["gps_lng", "gps_lat", "pitch", "roll", "heading", "beam_off_axis", "beam_heading"]:  # 角度类，保留2位小数
                             display_text = f"{value:.2f}"
                         elif info_key in ["rx_freq", "tx_freq", "rx_lo", "tx_lo"]:  # 频率类，保留2位小数
                             display_text = f"{value:.2f}"

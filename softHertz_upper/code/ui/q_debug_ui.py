@@ -93,9 +93,9 @@ class QDebugUI(QBaseUI):
         
     def create_debug_widgets(self):
         """创建DEBUG设备特定的UI组件"""
-        # 移除设备类型选择组件
-        self.device_type_label.hide()
-        self.device_type_cb.hide()
+        # 保留设备类型选择组件可见，允许用户切换设备
+        self.device_type_label.show()
+        self.device_type_cb.show()
         
         # 通信方式选择区域
         comm_group = QGroupBox("通信方式")

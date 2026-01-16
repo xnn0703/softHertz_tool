@@ -71,7 +71,7 @@ class AFD01_QSProtocol(ProtocolBase):
                 return None, f"数据长度不合理: {data_length}"
             
             # 计算并检查完整帧长度
-            total_frame_length = 5 + data_length  # 帧头(1)+命令(1)+长度(2)+数据(N)+CRC(2)
+            total_frame_length = 6 + data_length  # 帧头(1)+命令(1)+长度(2)+数据(N)+CRC(2)
             if len(frame) < total_frame_length:
                 return None, f"帧长度不足: 当前{len(frame)}字节, 需要{total_frame_length}字节"
 
@@ -86,7 +86,7 @@ class AFD01_QSProtocol(ProtocolBase):
             if len(frame) < crc_end:
                 return None, f"帧长度不足，无法解析校验和: 当前{len(frame)}字节, 需要{crc_end}字节"
                 
-            # 尝试提取校验和（2字节，高字节先）
+            # 尝试提取校验和（2字节，高字节在前，大端序）
             crc_bytes = frame[crc_start:crc_end]
             if len(crc_bytes) != 2:
                 return None, f"校验和字节不足: 预期2字节, 实际{len(crc_bytes)}字节"
@@ -96,7 +96,7 @@ class AFD01_QSProtocol(ProtocolBase):
             except struct.error as se:
                 return None, f"解析校验和失败: {str(se)}"
 
-            # 计算校验和：指令(1字节) + 数据长度(2字节) + 数据内容
+            # 计算校验和：使用简单累加和校验（根据设备实际使用的方式）
             checksum_data = frame[1:crc_start]  # 从命令字节到数据内容末尾
             calculated_checksum = 0
             for byte in checksum_data:
@@ -135,7 +135,7 @@ class AFD01_QSProtocol(ProtocolBase):
                     reboot_cmd = "重启" if data[6] == 0x01 else "正常工作"
                     
                     result.update({
-                        "snr": f"{snr:.2f}",
+                        "snr": snr,
                         "power_status": power_status,
                         "broadcast_lock_status": broadcast_lock_status,
                         "power_save_status": power_save_status,
@@ -214,23 +214,23 @@ class AFD01_QSProtocol(ProtocolBase):
                     
                     result.update({
                         "gps_lock_status": gps_lock_status,
-                        "gps_lng": f"{gps_lng:.2f}",
-                        "gps_lat": f"{gps_lat:.2f}",
-                        "gps_alt": f"{gps_alt}",
-                        "rx_freq": f"{rx_freq:.2f}",
-                        "tx_freq": f"{tx_freq:.2f}",
-                        "rx_lo": f"{rx_lo:.2f}",
-                        "tx_lo": f"{tx_lo:.2f}",
+                        "gps_lng": gps_lng,
+                        "gps_lat": gps_lat,
+                        "gps_alt": gps_alt,
+                        "rx_freq": rx_freq,
+                        "tx_freq": tx_freq,
+                        "rx_lo": rx_lo,
+                        "tx_lo": tx_lo,
                         "tx_enable": tx_enable,
                         "tx_polarization": polarization,
-                        "pitch": f"{pitch:.2f}",
-                        "roll": f"{roll:.2f}",
-                        "heading": f"{heading:.2f}",
-                        "beam_off_axis": f"{beam_off_axis:.2f}",
-                        "beam_heading": f"{beam_heading:.2f}",
+                        "pitch": pitch,
+                        "roll": roll,
+                        "heading": heading,
+                        "beam_off_axis": beam_off_axis,
+                        "beam_heading": beam_heading,
                         "tracking_mode": tracking_mode,
                         "antenna_search_status": antenna_search_status,
-                        "comm_status": f"{comm_status}",
+                        "comm_status": comm_status,
                         "runtime": f"{runtime}s"
                     })
                     
