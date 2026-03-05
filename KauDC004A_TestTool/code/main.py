@@ -3,6 +3,17 @@ from tkinter import ttk, messagebox, scrolledtext
 import serial
 import serial.tools.list_ports
 from protocol import build_frame, parse_response
+from afdt1024_protocol import (
+    build_tx_beam_frame, build_tx_enable_frame, build_tx_polarization_frame,
+    build_pa_enable_frame, build_phase_cal_frame, build_id_update_frame,
+    build_status_query_frame, parse_response as parse_afdt_response,
+    parse_status_response, POLARIZATION_LHCP, POLARIZATION_RHCP,
+    PA_ENABLE, PA_DISABLE, ARRAY_ENABLE, ARRAY_DISABLE,
+    calculate_beam_values,
+    # RX设备相关函数
+    build_rx_beam_frame, build_rx_enable_frame, build_rx_polarization_frame,
+    build_rx_phase_cal_frame, build_rx_status_query_frame, parse_rx_status_response
+)
 import threading
 import datetime
 import time
@@ -10,29 +21,29 @@ import queue
 
 # 定义布局配置字典
 layout_config = {
-    'port_cb': {'row': 0, 'column': 0, 'padx': 10, 'pady': 10},
-    'baud_cb': {'row': 0, 'column': 1, 'padx': 10, 'pady': 10},
-    'connect_btn': {'row': 0, 'column': 2, 'padx': 10, 'pady': 10},
-    'status_table': {'row': 1, 'column': 0, 'column_span': 4, 'padx': 10, 'pady': 10},
-    'txlo_btn': {'row': 2, 'column': 0, 'padx': 10, 'pady': 10},
-    'txlo_cb': {'row': 2, 'column': 1, 'padx': 10, 'pady': 10},
-    'rxlo_btn': {'row': 3, 'column': 0, 'padx': 10, 'pady': 10},
-    'rxlo_cb': {'row': 3, 'column': 1, 'padx': 10, 'pady': 10},
-    'cmd_cb': {'row': 4, 'column': 0, 'column_span': 1, 'padx': 10, 'pady': 10},
-    'param_entry': {'row': 4, 'column': 1, 'padx': 10, 'pady': 10},
-    'send_btn': {'row': 4, 'column': 2, 'padx': 10, 'pady': 10},
-    'text': {'row': 5, 'column': 0, 'column_span': 3, 'padx': 10, 'pady': 10},
-    'device_query_btn': {'row': 6, 'column': 1, 'padx': 10, 'pady': 10},
-    'clear_btn': {'row': 6, 'column': 2, 'padx': 10, 'pady': 10}
+    'port_cb': {'row': 0, 'column': 0, 'padx': 5, 'pady': 5},
+    'baud_cb': {'row': 0, 'column': 1, 'padx': 5, 'pady': 5},
+    'connect_btn': {'row': 0, 'column': 2, 'padx': 5, 'pady': 5},
+    'status_table': {'row': 1, 'column': 0, 'column_span': 4, 'padx': 5, 'pady': 5},
+    'txlo_btn': {'row': 2, 'column': 0, 'padx': 5, 'pady': 5},
+    'txlo_cb': {'row': 2, 'column': 1, 'padx': 5, 'pady': 5},
+    'rxlo_btn': {'row': 3, 'column': 0, 'padx': 5, 'pady': 5},
+    'rxlo_cb': {'row': 3, 'column': 1, 'padx': 5, 'pady': 5},
+    'cmd_cb': {'row': 4, 'column': 0, 'column_span': 1, 'padx': 5, 'pady': 5},
+    'param_entry': {'row': 4, 'column': 1, 'padx': 5, 'pady': 5},
+    'send_btn': {'row': 4, 'column': 2, 'padx': 5, 'pady': 5},
+    'text': {'row': 5, 'column': 0, 'column_span': 3, 'padx': 5, 'pady': 5},
+    'device_query_btn': {'row': 6, 'column': 1, 'padx': 5, 'pady': 5},
+    'clear_btn': {'row': 6, 'column': 2, 'padx': 5, 'pady': 5}
 }
 
-class SerialTool:
-    def __init__(self, master):
+class DeviceController:
+    def __init__(self, master, device_name):
         self.master = master
-        self.master.title("KaUDC004A串口调试助手")
+        self.device_name = device_name
         self.ser = None
         self.running = False
-        self.logfile = open("serial_log.txt", "a", encoding="utf-8")
+        self.logfile = open(f"{device_name}_serial_log.txt", "a", encoding="utf-8")
 
         # 响应队列，用于 query_device_worker
         self.response_queue = queue.Queue()
@@ -100,7 +111,7 @@ class SerialTool:
         self.send_btn.grid(row=layout_config['send_btn']['row'], column=layout_config['send_btn']['column'],
                            padx=layout_config['send_btn']['padx'], pady=layout_config['send_btn']['pady'])
 
-        self.text = scrolledtext.ScrolledText(master, width=80, height=10)
+        self.text = scrolledtext.ScrolledText(master, width=40, height=8)
         self.text.grid(row=layout_config['text']['row'], column=layout_config['text']['column'],
                        columnspan=layout_config['text']['column_span'], padx=layout_config['text']['padx'],
                        pady=layout_config['text']['pady'])
@@ -118,7 +129,7 @@ class SerialTool:
             0x0B: "版本回读", 0x0C: "温度查询", 0x13: "本振查询", 0x16: "衰减查询"
         }
 
-        # 定时器每5秒刷新一次串口列表
+        # 定时器每1秒刷新一次串口列表
         self.master.after(1000, self.update_ports)
 
     def update_ports(self):
@@ -291,35 +302,101 @@ class SerialTool:
                 if not chunk:
                     continue
                 buffer.extend(chunk)
-                while len(buffer) >= 2:
-                    if buffer[0] != 0xAA or buffer[1] != 0x55:
-                        buffer.pop(0)
-                        continue
-                    if len(buffer) < 12:
-                        break
-                    frame = bytes(buffer[:12])
-                    del buffer[:12]
-
-                    parsed, msg = parse_response(frame)
-                    line = f"<<< 收到: {frame.hex().upper()} [{msg}]"
+                
+                # 打印原始数据（每收到16字节或遇到帧头时打印）
+                if len(buffer) % 16 == 0 or (len(buffer) >= 3 and buffer[-3:] == b'\x50\x53\x41'):
+                    line = f"<<< 原始数据: {buffer.hex().upper()}"
                     self.text.insert(tk.END, line + "\n")
                     self.log(line)
+                
+                # 处理AFDT1024设备回复（以0x50 0x53 0x41开头）
+                while len(buffer) >= 3:
+                    if buffer[0] == 0x50 and buffer[1] == 0x53 and buffer[2] == 0x41:
+                        # 解析AFDT1024格式的帧
+                        if len(buffer) < 7:  # 最小帧长度：3字节帧头 + 1字节ID + 1字节长度 + 1字节addr + 1字节校验和
+                            break
+                        # 获取长度字段
+                        length = buffer[4]
+                        # 完整帧长度：3字节帧头 + 1字节ID + 1字节长度 + length字节数据 + 1字节校验和
+                        total_length = 3 + 1 + 1 + length + 1
+                        if len(buffer) < total_length:
+                            break
+                        # 提取完整帧
+                        frame = bytes(buffer[:total_length])
+                        del buffer[:total_length]
+                        
+                        line = f"<<< 收到AFDT1024帧: {frame.hex().upper()}"
+                        self.text.insert(tk.END, line + "\n")
+                        self.log(line)
+                        
+                        # 解析AFDT1024回复
+                        try:
+                            parsed, msg = parse_afdt_response(frame)
+                            line = f"<<< 解析结果: {msg}"
+                            self.text.insert(tk.END, line + "\n")
+                            self.log(line)
+                            
+                            if msg == "OK":
+                                # 解析状态回复
+                                if len(parsed) > 0:
+                                    # 尝试解析为状态回复
+                                    status, status_msg = parse_status_response(parsed)
+                                    if status_msg == "OK":
+                                        extra = f"状态: PA_EN={status.get('pa_en', False)}, 电压={status.get('sys_vcc', 0)}V, 温度={status.get('sys_temp', 0)}°C"
+                                        self.text.insert(tk.END, "    " + extra + "\n")
+                                        self.log("    " + extra)
+                        except Exception as e:
+                            line = f"<<< 解析失败: {str(e)}"
+                            self.text.insert(tk.END, line + "\n")
+                            self.log(line)
+                        
+                        self.text.see(tk.END)
+                    else:
+                        # 处理其他格式的帧（如0xAA 0x55开头的）
+                        if len(buffer) >= 2:
+                            if buffer[0] == 0xAA and buffer[1] == 0x55:
+                                if len(buffer) < 12:
+                                    break
+                                frame = bytes(buffer[:12])
+                                del buffer[:12]
 
-                    if msg == "OK":
-                        cmd = parsed[0]
-                        # 1) 原来的队列逻辑
-                        self.response_queue.put((cmd, parsed))
-                        # 2) 打印字段
-                        extra = self.parse_fields(cmd, parsed)
-                        if extra:
-                            self.text.insert(tk.END, "    " + extra + "\n")
-                            self.log("    " + extra)
-                        # 3) **立刻更新表格**（新增这段）
-                        name = self._cmd_name_map.get(cmd)
-                        if name:
-                            self.update_display(name, parsed)
+                                line = f"<<< 收到其他帧: {frame.hex().upper()}"
+                                self.text.insert(tk.END, line + "\n")
+                                self.log(line)
 
-                    self.text.see(tk.END)
+                                try:
+                                    parsed, msg = parse_response(frame)
+                                    line = f"<<< 解析结果: {msg}"
+                                    self.text.insert(tk.END, line + "\n")
+                                    self.log(line)
+
+                                    if msg == "OK":
+                                        cmd = parsed[0]
+                                        # 1) 原来的队列逻辑
+                                        self.response_queue.put((cmd, parsed))
+                                        # 2) 打印字段
+                                        extra = self.parse_fields(cmd, parsed)
+                                        if extra:
+                                            self.text.insert(tk.END, "    " + extra + "\n")
+                                            self.log("    " + extra)
+                                        # 3) **立刻更新表格**（新增这段）
+                                        name = self._cmd_name_map.get(cmd)
+                                        if name:
+                                            self.update_display(name, parsed)
+                                except Exception as e:
+                                    line = f"<<< 解析失败: {str(e)}"
+                                    self.text.insert(tk.END, line + "\n")
+                                    self.log(line)
+
+                                self.text.see(tk.END)
+                            else:
+                                # 不是我们需要的帧，打印并丢弃
+                                byte = buffer.pop(0)
+                                line = f"<<< 丢弃字节: {byte:02X}"
+                                self.text.insert(tk.END, line + "\n")
+                                self.log(line)
+                        else:
+                            break
             except Exception as e:
                 err = f"[接收错误] {e}"
                 self.text.insert(tk.END, err + "\n")
@@ -415,6 +492,771 @@ class SerialTool:
     def __del__(self):
         if self.logfile:
             self.logfile.close()
+
+class AFDT1024Controller:
+    def __init__(self, master, device_name):
+        self.master = master
+        self.device_name = device_name
+        self.ser = None
+        self.running = False
+        self.logfile = open(f"{device_name}_serial_log.txt", "a", encoding="utf-8")
+
+        # 响应队列
+        self.response_queue = queue.Queue()
+
+        # 串口设置
+        self.port_cb = ttk.Combobox(master, width=10)
+        self.port_cb.grid(row=0, column=0, padx=5, pady=5)
+        self.update_ports()
+
+        self.baud_cb = ttk.Combobox(master, values=["9600", "19200", "38400", "115200", "460800", "921600"], width=10)
+        self.baud_cb.grid(row=0, column=1, padx=5, pady=5)
+        self.baud_cb.set("460800")  # AFDT1024默认波特率
+
+        self.connect_btn = ttk.Button(master, text="打开串口", command=self.toggle_serial)
+        self.connect_btn.grid(row=0, column=2, padx=5, pady=5)
+
+        # 子阵ID设置
+        ttk.Label(master, text="子阵ID:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
+        self.id_entry = ttk.Entry(master, width=5)
+        self.id_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
+        self.id_entry.insert(0, "1")
+
+        # TX波束设置
+        ttk.Label(master, text="TX波束设置").grid(row=2, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W)
+        
+        ttk.Label(master, text="实际频率(MHz):").grid(row=3, column=0, padx=5, pady=3, sticky=tk.W)
+        self.freq_entry = ttk.Entry(master, width=10)
+        self.freq_entry.grid(row=3, column=1, padx=5, pady=3, sticky=tk.W)
+        self.freq_entry.insert(0, "27500")  # 默认频率
+
+        ttk.Label(master, text="俯仰角θ:").grid(row=4, column=0, padx=5, pady=3, sticky=tk.W)
+        self.theta_entry = ttk.Entry(master, width=8)
+        self.theta_entry.grid(row=4, column=1, padx=5, pady=3, sticky=tk.W)
+        self.theta_entry.insert(0, "0")
+
+        ttk.Label(master, text="方位角φ:").grid(row=5, column=0, padx=5, pady=3, sticky=tk.W)
+        self.phi_entry = ttk.Entry(master, width=8)
+        self.phi_entry.grid(row=5, column=1, padx=5, pady=3, sticky=tk.W)
+        self.phi_entry.insert(0, "0")
+
+        self.set_beam_btn = ttk.Button(master, text="设置波束", command=self.set_beam)
+        self.set_beam_btn.grid(row=3, column=2, rowspan=3, padx=5, pady=3, sticky=tk.NS)
+
+        # TX阵列使能
+        ttk.Label(master, text="TX阵列:").grid(row=6, column=0, padx=5, pady=5, sticky=tk.W)
+        self.array_enable_var = tk.BooleanVar()
+        self.array_enable_check = ttk.Checkbutton(master, text="使能", variable=self.array_enable_var)
+        self.array_enable_check.grid(row=6, column=1, padx=5, pady=5, sticky=tk.W)
+        self.set_array_btn = ttk.Button(master, text="应用", command=self.set_array_enable)
+        self.set_array_btn.grid(row=6, column=2, padx=5, pady=5, sticky=tk.W)
+
+        # TX极化设置
+        ttk.Label(master, text="极化设置:").grid(row=7, column=0, padx=5, pady=5, sticky=tk.W)
+        self.polarization_var = tk.IntVar(value=POLARIZATION_LHCP)
+        ttk.Radiobutton(master, text="LHCP", variable=self.polarization_var, value=POLARIZATION_LHCP).grid(row=7, column=1, padx=5, pady=5, sticky=tk.W)
+        ttk.Radiobutton(master, text="RHCP", variable=self.polarization_var, value=POLARIZATION_RHCP).grid(row=7, column=2, padx=5, pady=5, sticky=tk.W)
+        self.set_polarization_btn = ttk.Button(master, text="设置极化", command=self.set_polarization)
+        self.set_polarization_btn.grid(row=8, column=1, columnspan=2, padx=5, pady=5, sticky=tk.W)
+
+        # PA使能
+        ttk.Label(master, text="推动PA:").grid(row=9, column=0, padx=5, pady=5, sticky=tk.W)
+        self.pa_enable_var = tk.BooleanVar()
+        self.pa_enable_check = ttk.Checkbutton(master, text="使能", variable=self.pa_enable_var)
+        self.pa_enable_check.grid(row=9, column=1, padx=5, pady=5, sticky=tk.W)
+        self.set_pa_btn = ttk.Button(master, text="应用", command=self.set_pa_enable)
+        self.set_pa_btn.grid(row=9, column=2, padx=5, pady=5, sticky=tk.W)
+
+        # 相位校准
+        ttk.Label(master, text="相位偏移(0-63):").grid(row=10, column=0, padx=5, pady=5, sticky=tk.W)
+        self.phase_entry = ttk.Entry(master, width=5)
+        self.phase_entry.grid(row=10, column=1, padx=5, pady=5, sticky=tk.W)
+        self.phase_entry.insert(0, "0")
+        self.set_phase_btn = ttk.Button(master, text="校准", command=self.set_phase_cal)
+        self.set_phase_btn.grid(row=10, column=2, padx=5, pady=5, sticky=tk.W)
+
+        # 状态查询
+        self.query_status_btn = ttk.Button(master, text="查询状态", command=self.query_status)
+        self.query_status_btn.grid(row=11, column=0, columnspan=3, padx=5, pady=5)
+
+        # 状态表格
+        self.status_table = ttk.Treeview(master, columns=("参数", "值"), show="headings", height=6)
+        self.status_table.grid(row=12, column=0, columnspan=3, padx=5, pady=5, sticky=tk.NSEW)
+        self.status_table.heading("参数", text="参数")
+        self.status_table.heading("值", text="值")
+        
+        # 状态项
+        status_params = ["状态字", "输入电压(V)", "温度(°C)", "温补衰减", "系统版本"]
+        for param in status_params:
+            self.status_table.insert("", "end", values=(param, "N/A"))
+
+        # 日志显示
+        self.text = scrolledtext.ScrolledText(master, width=40, height=8)
+        self.text.grid(row=13, column=0, columnspan=3, padx=5, pady=5, sticky=tk.NSEW)
+
+        # 清除按钮
+        self.clear_btn = ttk.Button(master, text="清除数据", command=self.clear_data)
+        self.clear_btn.grid(row=14, column=2, padx=5, pady=5, sticky=tk.E)
+
+        # 定时器更新串口列表
+        self.master.after(1000, self.update_ports)
+
+    def update_ports(self):
+        ports = [p.device for p in serial.tools.list_ports.comports()]
+        self.port_cb['values'] = ports
+
+        current_port = self.port_cb.get()
+        if current_port not in ports and self.ser and self.ser.is_open:
+            self.ser.close()
+            self.connect_btn.config(text="打开串口")
+            self.running = False
+
+        if current_port not in ports:
+            self.port_cb.set(ports[0] if ports else "")
+
+        self.master.after(1000, self.update_ports)
+
+    def log(self, msg):
+        ts = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S] ")
+        self.logfile.write(ts + msg + "\n")
+        self.logfile.flush()
+
+    def toggle_serial(self):
+        if self.ser and self.ser.is_open:
+            self.running = False
+            self.ser.close()
+            self.connect_btn.config(text="打开串口")
+        else:
+            try:
+                self.ser = serial.Serial(self.port_cb.get(), int(self.baud_cb.get()), timeout=0.1)
+                self.running = True
+                threading.Thread(target=self.read_thread, daemon=True).start()
+                self.connect_btn.config(text="关闭串口")
+            except Exception as e:
+                messagebox.showerror("串口错误", str(e))
+
+    def send_frame(self, frame):
+        if not self.ser or not self.ser.is_open:
+            messagebox.showwarning("未连接", "请先打开串口")
+            return
+
+        try:
+            self.ser.write(frame)
+            line = f">>> 发送: {frame.hex().upper()}"
+            self.text.insert(tk.END, line + "\n")
+            self.log(line)
+        except Exception as e:
+            messagebox.showerror("发送错误", str(e))
+
+    def set_beam(self):
+        if not self.ser or not self.ser.is_open:
+            messagebox.showwarning("未连接", "请先打开串口")
+            return
+
+        try:
+            device_id = int(self.id_entry.get())
+            actual_freq = float(self.freq_entry.get())
+            theta = float(self.theta_entry.get())
+            phi = float(self.phi_entry.get())
+
+            # 验证频率范围
+            min_freq = 27500
+            max_freq = 27500 + 50 * 70  # 27500 + 3500 = 31000
+            if not (min_freq <= actual_freq <= max_freq):
+                messagebox.showerror("参数错误", f"频率必须在{min_freq}-{max_freq} MHz之间")
+                return
+
+            # 转换为频段号
+            freq = int((actual_freq - 27500) / 50)
+            
+            # 验证频段号范围
+            if not (0 <= freq <= 70):
+                messagebox.showerror("参数错误", "计算得到的频段号超出范围")
+                return
+
+            # 计算beam值
+            beam_h, beam_v = calculate_beam_values(theta, phi, actual_freq, is_tx=True)
+
+            frame = build_tx_beam_frame(device_id, freq, beam_h, beam_v)
+            self.send_frame(frame)
+            self.text.insert(tk.END, f"实际频率: {actual_freq} MHz, 转换为频段号: {freq}\n")
+            self.text.insert(tk.END, f"输入角度: θ={theta}°, φ={phi}°\n")
+            self.text.insert(tk.END, f"计算得到: beam_h={beam_h}, beam_v={beam_v}\n")
+        except ValueError:
+            messagebox.showerror("参数错误", "请输入有效的数字")
+
+    def set_array_enable(self):
+        if not self.ser or not self.ser.is_open:
+            messagebox.showwarning("未连接", "请先打开串口")
+            return
+
+        try:
+            device_id = int(self.id_entry.get())
+            enable = self.array_enable_var.get()
+            frame = build_tx_enable_frame(device_id, enable)
+            self.send_frame(frame)
+        except ValueError:
+            messagebox.showerror("参数错误", "请输入有效的设备ID")
+
+    def set_polarization(self):
+        if not self.ser or not self.ser.is_open:
+            messagebox.showwarning("未连接", "请先打开串口")
+            return
+
+        try:
+            device_id = int(self.id_entry.get())
+            polarization = self.polarization_var.get()
+            frame = build_tx_polarization_frame(device_id, polarization)
+            self.send_frame(frame)
+        except ValueError:
+            messagebox.showerror("参数错误", "请输入有效的设备ID")
+
+    def set_pa_enable(self):
+        if not self.ser or not self.ser.is_open:
+            messagebox.showwarning("未连接", "请先打开串口")
+            return
+
+        try:
+            device_id = int(self.id_entry.get())
+            enable = self.pa_enable_var.get()
+            frame = build_pa_enable_frame(device_id, enable)
+            self.send_frame(frame)
+        except ValueError:
+            messagebox.showerror("参数错误", "请输入有效的设备ID")
+
+    def set_phase_cal(self):
+        if not self.ser or not self.ser.is_open:
+            messagebox.showwarning("未连接", "请先打开串口")
+            return
+
+        try:
+            device_id = int(self.id_entry.get())
+            phase_offset = int(self.phase_entry.get())
+
+            if not (0 <= phase_offset <= 63):
+                messagebox.showerror("参数错误", "相位偏移必须在0-63之间")
+                return
+
+            frame = build_phase_cal_frame(device_id, phase_offset)
+            self.send_frame(frame)
+        except ValueError:
+            messagebox.showerror("参数错误", "请输入有效的数字")
+
+    def query_status(self):
+        if not self.ser or not self.ser.is_open:
+            messagebox.showwarning("未连接", "请先打开串口")
+            return
+
+        try:
+            device_id = int(self.id_entry.get())
+            frame = build_status_query_frame(device_id)
+            self.send_frame(frame)
+        except ValueError:
+            messagebox.showerror("参数错误", "请输入有效的设备ID")
+
+    def read_thread(self):
+        buffer = bytearray()
+        error_count = 0
+        max_errors = 10
+        
+        while self.running:
+            try:
+                if not self.ser or not self.ser.is_open:
+                    time.sleep(0.1)
+                    continue
+                
+                chunk = self.ser.read(1)
+                if not chunk:
+                    time.sleep(0.001)  # 避免CPU占用过高
+                    continue
+                
+                buffer.extend(chunk)
+                
+                # 打印原始数据（每收到16字节或遇到帧头时打印）
+                if len(buffer) % 16 == 0 or (len(buffer) >= 3 and buffer[-3:] == b'\x50\x53\x41'):
+                    line = f"<<< 原始数据: {buffer.hex().upper()}"
+                    self.text.insert(tk.END, line + "\n")
+                    self.log(line)
+                
+                # 寻找帧头
+                while len(buffer) >= 3:
+                    if buffer[:3] != b'\x50\x53\x41':
+                        # 打印丢弃的字节
+                        byte = buffer.pop(0)
+                        line = f"<<< 丢弃字节: {byte:02X}"
+                        self.text.insert(tk.END, line + "\n")
+                        self.log(line)
+                        continue
+                    
+                    # 尝试解析完整帧
+                    if len(buffer) >= 6:
+                        length = buffer[4]
+                        total_length = 5 + length + 1  # 帧头(3)+ID(1)+长度(1)+数据(length)+校验和(1)
+                        
+                        if len(buffer) >= total_length:
+                            frame = bytes(buffer[:total_length])
+                            del buffer[:total_length]
+                            
+                            line = f"<<< 收到帧: {frame.hex().upper()}"
+                            self.text.insert(tk.END, line + "\n")
+                            self.log(line)
+                            
+                            try:
+                                parsed, msg = parse_afdt_response(frame)
+                                line = f"<<< 解析结果: {msg}"
+                                self.text.insert(tk.END, line + "\n")
+                                self.log(line)
+
+                                if msg == "OK" and parsed:
+                                    # 处理状态响应
+                                    if parsed['addr'] == 0x5C and parsed['payload']:
+                                        status_info, status_msg = parse_status_response(parsed['payload'])
+                                        if status_msg == "OK" and status_info:
+                                            self.update_status_display(status_info)
+                                            self.text.insert(tk.END, f"状态查询成功: {status_info}\n")
+                                            self.log(f"状态查询成功: {status_info}")
+                            except Exception as e:
+                                line = f"<<< 解析失败: {str(e)}"
+                                self.text.insert(tk.END, line + "\n")
+                                self.log(line)
+
+                    self.text.see(tk.END)
+                    error_count = 0  # 重置错误计数
+            except Exception as e:
+                error_count += 1
+                if error_count <= max_errors:
+                    err = f"[接收错误] {e}"
+                    self.text.insert(tk.END, err + "\n")
+                    self.log(err)
+                elif error_count == max_errors + 1:
+                    err = "[接收错误] 连续错误过多，暂停错误打印"
+                    self.text.insert(tk.END, err + "\n")
+                    self.log(err)
+                
+                # 检查串口是否仍然打开
+                if not self.ser or not self.ser.is_open:
+                    self.running = False
+                    err = "[接收错误] 串口已关闭，停止接收线程"
+                    self.text.insert(tk.END, err + "\n")
+                    self.log(err)
+                    break
+                
+                time.sleep(0.1)  # 避免错误循环过快
+
+    def update_status_display(self, status_info):
+        # 更新状态表格
+        items = self.status_table.get_children()
+        if items:
+            self.status_table.item(items[0], values=("状态字", f"0x{status_info['state']:04X}"))
+            self.status_table.item(items[1], values=("输入电压(V)", f"{status_info['sys_vcc']:.1f}"))
+            self.status_table.item(items[2], values=("温度(°C)", f"{status_info['sys_temp']}"))
+            self.status_table.item(items[3], values=("温补衰减", f"{status_info['att_tc']}"))
+            self.status_table.item(items[4], values=("系统版本", f"{status_info['mcu_ver']}"))
+
+    def clear_data(self):
+        self.text.delete('1.0', tk.END)
+        for iid in self.status_table.get_children():
+            param = self.status_table.item(iid, 'values')[0]
+            self.status_table.item(iid, values=(param, "N/A"))
+        while not self.response_queue.empty():
+            try:
+                self.response_queue.get_nowait()
+            except queue.Empty:
+                break
+        self.log("已清除所有数据和缓存")
+
+    def __del__(self):
+        if self.logfile:
+            self.logfile.close()
+
+class AFDR1024Controller:
+    def __init__(self, master, device_name):
+        self.master = master
+        self.device_name = device_name
+        self.ser = None
+        self.running = False
+        self.logfile = open(f"{device_name}_serial_log.txt", "a", encoding="utf-8")
+
+        # 响应队列
+        self.response_queue = queue.Queue()
+
+        # 串口设置
+        self.port_cb = ttk.Combobox(master, width=10)
+        self.port_cb.grid(row=0, column=0, padx=5, pady=5)
+        self.update_ports()
+
+        self.baud_cb = ttk.Combobox(master, values=["9600", "19200", "38400", "115200", "460800", "921600"], width=10)
+        self.baud_cb.grid(row=0, column=1, padx=5, pady=5)
+        self.baud_cb.set("460800")  # AFDR1024默认波特率
+
+        self.connect_btn = ttk.Button(master, text="打开串口", command=self.toggle_serial)
+        self.connect_btn.grid(row=0, column=2, padx=5, pady=5)
+
+        # 子阵ID设置
+        ttk.Label(master, text="子阵ID:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
+        self.id_entry = ttk.Entry(master, width=5)
+        self.id_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
+        self.id_entry.insert(0, "1")
+
+        # RX波束设置
+        ttk.Label(master, text="RX波束设置").grid(row=2, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W)
+        
+        ttk.Label(master, text="实际频率(MHz):").grid(row=3, column=0, padx=5, pady=3, sticky=tk.W)
+        self.freq_entry = ttk.Entry(master, width=10)
+        self.freq_entry.grid(row=3, column=1, padx=5, pady=3, sticky=tk.W)
+        self.freq_entry.insert(0, "17700")  # 默认频率
+
+        ttk.Label(master, text="俯仰角θ:").grid(row=4, column=0, padx=5, pady=3, sticky=tk.W)
+        self.theta_entry = ttk.Entry(master, width=8)
+        self.theta_entry.grid(row=4, column=1, padx=5, pady=3, sticky=tk.W)
+        self.theta_entry.insert(0, "0")
+
+        ttk.Label(master, text="方位角φ:").grid(row=5, column=0, padx=5, pady=3, sticky=tk.W)
+        self.phi_entry = ttk.Entry(master, width=8)
+        self.phi_entry.grid(row=5, column=1, padx=5, pady=3, sticky=tk.W)
+        self.phi_entry.insert(0, "0")
+
+        self.set_beam_btn = ttk.Button(master, text="设置波束", command=self.set_beam)
+        self.set_beam_btn.grid(row=3, column=2, rowspan=3, padx=5, pady=3, sticky=tk.NS)
+
+        # RX阵列使能
+        ttk.Label(master, text="RX阵列:").grid(row=6, column=0, padx=5, pady=5, sticky=tk.W)
+        self.array_enable_var = tk.BooleanVar()
+        self.array_enable_check = ttk.Checkbutton(master, text="使能", variable=self.array_enable_var)
+        self.array_enable_check.grid(row=6, column=1, padx=5, pady=5, sticky=tk.W)
+        self.set_array_btn = ttk.Button(master, text="应用", command=self.set_array_enable)
+        self.set_array_btn.grid(row=6, column=2, padx=5, pady=5, sticky=tk.W)
+
+        # RX极化设置
+        ttk.Label(master, text="极化设置:").grid(row=7, column=0, padx=5, pady=5, sticky=tk.W)
+        self.polarization_var = tk.IntVar(value=POLARIZATION_LHCP)
+        ttk.Radiobutton(master, text="LHCP", variable=self.polarization_var, value=POLARIZATION_LHCP).grid(row=7, column=1, padx=5, pady=5, sticky=tk.W)
+        ttk.Radiobutton(master, text="RHCP", variable=self.polarization_var, value=POLARIZATION_RHCP).grid(row=7, column=2, padx=5, pady=5, sticky=tk.W)
+        self.set_polarization_btn = ttk.Button(master, text="设置极化", command=self.set_polarization)
+        self.set_polarization_btn.grid(row=8, column=1, columnspan=2, padx=5, pady=5, sticky=tk.W)
+
+        # 相位校准
+        ttk.Label(master, text="相位偏移(0-63):").grid(row=9, column=0, padx=5, pady=5, sticky=tk.W)
+        self.phase_entry = ttk.Entry(master, width=5)
+        self.phase_entry.grid(row=9, column=1, padx=5, pady=5, sticky=tk.W)
+        self.phase_entry.insert(0, "0")
+        self.set_phase_btn = ttk.Button(master, text="校准", command=self.set_phase_cal)
+        self.set_phase_btn.grid(row=9, column=2, padx=5, pady=5, sticky=tk.W)
+
+        # 状态查询
+        self.query_status_btn = ttk.Button(master, text="查询状态", command=self.query_status)
+        self.query_status_btn.grid(row=10, column=0, columnspan=3, padx=5, pady=5)
+
+        # 状态表格
+        self.status_table = ttk.Treeview(master, columns=("参数", "值"), show="headings", height=6)
+        self.status_table.grid(row=11, column=0, columnspan=3, padx=5, pady=5, sticky=tk.NSEW)
+        self.status_table.heading("参数", text="参数")
+        self.status_table.heading("值", text="值")
+        
+        # 状态项
+        status_params = ["版本", "输入电压(V)", "温度(°C)", "温补衰减", "系统版本"]
+        for param in status_params:
+            self.status_table.insert("", "end", values=(param, "N/A"))
+
+        # 日志显示
+        self.text = scrolledtext.ScrolledText(master, width=40, height=8)
+        self.text.grid(row=12, column=0, columnspan=3, padx=5, pady=5, sticky=tk.NSEW)
+
+        # 清除按钮
+        self.clear_btn = ttk.Button(master, text="清除数据", command=self.clear_data)
+        self.clear_btn.grid(row=13, column=2, padx=5, pady=5, sticky=tk.E)
+
+        # 定时器更新串口列表
+        self.master.after(1000, self.update_ports)
+
+    def update_ports(self):
+        ports = [p.device for p in serial.tools.list_ports.comports()]
+        self.port_cb['values'] = ports
+
+        current_port = self.port_cb.get()
+        if current_port not in ports and self.ser and self.ser.is_open:
+            self.ser.close()
+            self.connect_btn.config(text="打开串口")
+            self.running = False
+
+        if current_port not in ports:
+            self.port_cb.set(ports[0] if ports else "")
+
+        self.master.after(1000, self.update_ports)
+
+    def log(self, msg):
+        ts = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S] ")
+        self.logfile.write(ts + msg + "\n")
+        self.logfile.flush()
+
+    def toggle_serial(self):
+        if self.ser and self.ser.is_open:
+            self.running = False
+            self.ser.close()
+            self.connect_btn.config(text="打开串口")
+        else:
+            try:
+                self.ser = serial.Serial(self.port_cb.get(), int(self.baud_cb.get()), timeout=0.1)
+                self.running = True
+                threading.Thread(target=self.read_thread, daemon=True).start()
+                self.connect_btn.config(text="关闭串口")
+            except Exception as e:
+                messagebox.showerror("串口错误", str(e))
+
+    def send_frame(self, frame):
+        if not self.ser or not self.ser.is_open:
+            messagebox.showwarning("未连接", "请先打开串口")
+            return
+
+        try:
+            self.ser.write(frame)
+            line = f">>> 发送: {frame.hex().upper()}"
+            self.text.insert(tk.END, line + "\n")
+            self.log(line)
+        except Exception as e:
+            messagebox.showerror("发送错误", str(e))
+
+    def set_beam(self):
+        if not self.ser or not self.ser.is_open:
+            messagebox.showwarning("未连接", "请先打开串口")
+            return
+
+        try:
+            device_id = int(self.id_entry.get())
+            actual_freq = float(self.freq_entry.get())
+            theta = float(self.theta_entry.get())
+            phi = float(self.phi_entry.get())
+
+            # 验证频率范围
+            min_freq = 17700
+            max_freq = 17700 + 50 * 70  # 17700 + 3500 = 21200
+            if not (min_freq <= actual_freq <= max_freq):
+                messagebox.showerror("参数错误", f"频率必须在{min_freq}-{max_freq} MHz之间")
+                return
+
+            # 转换为频段号
+            freq = int((actual_freq - 17700) / 50)
+            
+            # 验证频段号范围
+            if not (0 <= freq <= 70):
+                messagebox.showerror("参数错误", "计算得到的频段号超出范围")
+                return
+
+            # 计算beam值
+            beam_h, beam_v = calculate_beam_values(theta, phi, actual_freq, is_tx=False)
+
+            frame = build_rx_beam_frame(device_id, freq, beam_v, beam_h)
+            self.send_frame(frame)
+            self.text.insert(tk.END, f"实际频率: {actual_freq} MHz, 转换为频段号: {freq}\n")
+            self.text.insert(tk.END, f"输入角度: θ={theta}°, φ={phi}°\n")
+            self.text.insert(tk.END, f"计算得到: beam_h={beam_h}, beam_v={beam_v}\n")
+        except ValueError:
+            messagebox.showerror("参数错误", "请输入有效的数字")
+
+    def set_array_enable(self):
+        if not self.ser or not self.ser.is_open:
+            messagebox.showwarning("未连接", "请先打开串口")
+            return
+
+        try:
+            device_id = int(self.id_entry.get())
+            enable = self.array_enable_var.get()
+            frame = build_rx_enable_frame(device_id, enable)
+            self.send_frame(frame)
+        except ValueError:
+            messagebox.showerror("参数错误", "请输入有效的设备ID")
+
+    def set_polarization(self):
+        if not self.ser or not self.ser.is_open:
+            messagebox.showwarning("未连接", "请先打开串口")
+            return
+
+        try:
+            device_id = int(self.id_entry.get())
+            polarization = self.polarization_var.get()
+            frame = build_rx_polarization_frame(device_id, polarization)
+            self.send_frame(frame)
+        except ValueError:
+            messagebox.showerror("参数错误", "请输入有效的设备ID")
+
+    def set_phase_cal(self):
+        if not self.ser or not self.ser.is_open:
+            messagebox.showwarning("未连接", "请先打开串口")
+            return
+
+        try:
+            device_id = int(self.id_entry.get())
+            phase_offset = int(self.phase_entry.get())
+
+            if not (0 <= phase_offset <= 63):
+                messagebox.showerror("参数错误", "相位偏移必须在0-63之间")
+                return
+
+            frame = build_rx_phase_cal_frame(device_id, phase_offset)
+            self.send_frame(frame)
+        except ValueError:
+            messagebox.showerror("参数错误", "请输入有效的数字")
+
+    def query_status(self):
+        if not self.ser or not self.ser.is_open:
+            messagebox.showwarning("未连接", "请先打开串口")
+            return
+
+        try:
+            device_id = int(self.id_entry.get())
+            frame = build_rx_status_query_frame(device_id)
+            self.send_frame(frame)
+        except ValueError:
+            messagebox.showerror("参数错误", "请输入有效的设备ID")
+
+    def read_thread(self):
+        buffer = bytearray()
+        error_count = 0
+        max_errors = 10
+        
+        while self.running:
+            try:
+                if not self.ser or not self.ser.is_open:
+                    time.sleep(0.1)
+                    continue
+                
+                chunk = self.ser.read(1)
+                if not chunk:
+                    time.sleep(0.001)  # 避免CPU占用过高
+                    continue
+                
+                buffer.extend(chunk)
+                
+                # 打印原始数据（每收到16字节或遇到帧头时打印）
+                if len(buffer) % 16 == 0 or (len(buffer) >= 3 and buffer[-3:] == b'\x50\x53\x41'):
+                    line = f"<<< 原始数据: {buffer.hex().upper()}"
+                    self.text.insert(tk.END, line + "\n")
+                    self.log(line)
+                
+                # 寻找帧头
+                while len(buffer) >= 3:
+                    if buffer[:3] != b'\x50\x53\x41':
+                        # 打印丢弃的字节
+                        byte = buffer.pop(0)
+                        line = f"<<< 丢弃字节: {byte:02X}"
+                        self.text.insert(tk.END, line + "\n")
+                        self.log(line)
+                        continue
+                    
+                    # 尝试解析完整帧
+                    if len(buffer) >= 6:
+                        length = buffer[4]
+                        total_length = 5 + length + 1  # 帧头(3)+ID(1)+长度(1)+数据(length)+校验和(1)
+                        
+                        if len(buffer) >= total_length:
+                            frame = bytes(buffer[:total_length])
+                            del buffer[:total_length]
+                            
+                            line = f"<<< 收到帧: {frame.hex().upper()}"
+                            self.text.insert(tk.END, line + "\n")
+                            self.log(line)
+                            
+                            try:
+                                parsed, msg = parse_afdt_response(frame)
+                                line = f"<<< 解析结果: {msg}"
+                                self.text.insert(tk.END, line + "\n")
+                                self.log(line)
+
+                                if msg == "OK" and parsed:
+                                    # 处理RX状态响应
+                                    if parsed['addr'] == 0x9C and parsed['payload']:
+                                        status_info, status_msg = parse_rx_status_response(parsed['payload'])
+                                        if status_msg == "OK" and status_info:
+                                            self.update_status_display(status_info)
+                                            self.text.insert(tk.END, f"状态查询成功: {status_info}\n")
+                                            self.log(f"状态查询成功: {status_info}")
+                            except Exception as e:
+                                line = f"<<< 解析失败: {str(e)}"
+                                self.text.insert(tk.END, line + "\n")
+                                self.log(line)
+
+                    self.text.see(tk.END)
+                    error_count = 0  # 重置错误计数
+            except Exception as e:
+                error_count += 1
+                if error_count <= max_errors:
+                    err = f"[接收错误] {e}"
+                    self.text.insert(tk.END, err + "\n")
+                    self.log(err)
+                elif error_count == max_errors + 1:
+                    err = "[接收错误] 连续错误过多，暂停错误打印"
+                    self.text.insert(tk.END, err + "\n")
+                    self.log(err)
+                
+                # 检查串口是否仍然打开
+                if not self.ser or not self.ser.is_open:
+                    self.running = False
+                    err = "[接收错误] 串口已关闭，停止接收线程"
+                    self.text.insert(tk.END, err + "\n")
+                    self.log(err)
+                    break
+                
+                time.sleep(0.1)  # 避免错误循环过快
+
+    def update_status_display(self, status_info):
+        # 更新状态表格
+        items = self.status_table.get_children()
+        if items:
+            self.status_table.item(items[0], values=("版本", f"{status_info['rev']}"))
+            self.status_table.item(items[1], values=("输入电压(V)", f"{status_info['sys_vcc']:.1f}"))
+            self.status_table.item(items[2], values=("温度(°C)", f"{status_info['sys_temp']}"))
+            self.status_table.item(items[3], values=("温补衰减", f"{status_info['att_tc']}"))
+            self.status_table.item(items[4], values=("系统版本", f"{status_info['mcu_ver']}"))
+
+    def clear_data(self):
+        self.text.delete('1.0', tk.END)
+        for iid in self.status_table.get_children():
+            param = self.status_table.item(iid, 'values')[0]
+            self.status_table.item(iid, values=(param, "N/A"))
+        while not self.response_queue.empty():
+            try:
+                self.response_queue.get_nowait()
+            except queue.Empty:
+                break
+        self.log("已清除所有数据和缓存")
+
+    def __del__(self):
+        if self.logfile:
+            self.logfile.close()
+
+class SerialTool:
+    def __init__(self, master):
+        self.master = master
+        self.master.title("多设备串口调试助手")
+        self.master.geometry("1400x600")
+        
+        # 创建主框架
+        self.main_frame = ttk.Frame(master)
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # 创建设备框架
+        self.devices = {}
+        
+        # KaUDC004A 设备框架
+        kaudc_frame = ttk.LabelFrame(self.main_frame, text="KaUDC004A")
+        kaudc_frame.grid(row=0, column=0, padx=5, pady=5, sticky=tk.NSEW)
+        self.devices["KaUDC004A"] = DeviceController(kaudc_frame, "KaUDC004A")
+        
+        # Ka1024_TX 设备框架（使用AFDT1024协议）
+        ka1024_tx_frame = ttk.LabelFrame(self.main_frame, text="Ka1024_TX")
+        ka1024_tx_frame.grid(row=0, column=1, padx=5, pady=5, sticky=tk.NSEW)
+        self.devices["Ka1024_TX"] = AFDT1024Controller(ka1024_tx_frame, "Ka1024_TX")
+        
+        # Ka1024_RX 设备框架（使用AFDR1024协议）
+        ka1024_rx_frame = ttk.LabelFrame(self.main_frame, text="Ka1024_RX")
+        ka1024_rx_frame.grid(row=0, column=2, padx=5, pady=5, sticky=tk.NSEW)
+        self.devices["Ka1024_RX"] = AFDR1024Controller(ka1024_rx_frame, "Ka1024_RX")
+        
+        # 设置列权重，使三个设备框架均匀分布
+        self.main_frame.columnconfigure(0, weight=1)
+        self.main_frame.columnconfigure(1, weight=1)
+        self.main_frame.columnconfigure(2, weight=1)
+        self.main_frame.rowconfigure(0, weight=1)
 
 if __name__ == "__main__":
     root = tk.Tk()
