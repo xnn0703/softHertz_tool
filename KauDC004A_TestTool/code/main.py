@@ -257,26 +257,33 @@ class DeviceController:
             messagebox.showerror("发送错误", str(e))
 
     def parse_fields(self, cmd_byte, data):
-        if cmd_byte == 0x0B:
-            # 提取版本号：Byte5 到 Byte7，合并成一个 24 位的整数
-            version_bytes = data[1:5]  # 取 Byte5, Byte6, Byte7 Byte8
-            version = int.from_bytes(version_bytes, byteorder='big')  # 转换为十进制
-            return f"版本号: {version}"
-        elif cmd_byte == 0x0C:
-            temp_c = data[1]
-            return f"温度: {temp_c}°C"
-        elif cmd_byte == 0x13:
-            tx = int.from_bytes(data[1:3], 'big')
-            rx = int.from_bytes(data[3:5], 'big')
-            bits = f"{data[5]:08b}"
-            return f"TxLO: {tx} MHz, RxLO: {rx} MHz, LOCK: {bits}"
-        elif cmd_byte in (0x14, 0x15):
-            att = int.from_bytes(data[4:6], 'big') / 10
-            return f"衰减: {att:.1f} dB"
-        elif cmd_byte == 0x16:
-            tx = int.from_bytes(data[1:3], 'big') / 10
-            rx = int.from_bytes(data[3:5], 'big') / 10
-            return f"Tx衰减: {tx:.1f} dB, Rx衰减: {rx:.1f} dB"
+        try:
+            if len(data) < 6:
+                return ""
+            
+            if cmd_byte == 0x0B:
+                version_bytes = data[1:5]
+                if len(version_bytes) < 4:
+                    return ""
+                version = int.from_bytes(version_bytes, byteorder='big')
+                return f"版本号: {version}"
+            elif cmd_byte == 0x0C:
+                temp_c = data[1]
+                return f"温度: {temp_c}°C"
+            elif cmd_byte == 0x13:
+                tx = int.from_bytes(data[1:3], 'big')
+                rx = int.from_bytes(data[3:5], 'big')
+                bits = f"{data[5]:08b}"
+                return f"TxLO: {tx} MHz, RxLO: {rx} MHz, LOCK: {bits}"
+            elif cmd_byte in (0x14, 0x15):
+                att = int.from_bytes(data[4:6], 'big') / 10
+                return f"衰减: {att:.1f} dB"
+            elif cmd_byte == 0x16:
+                tx = int.from_bytes(data[1:3], 'big') / 10
+                rx = int.from_bytes(data[3:5], 'big') / 10
+                return f"Tx衰减: {tx:.1f} dB, Rx衰减: {rx:.1f} dB"
+        except (ValueError, TypeError, IndexError) as e:
+            return f"[解析错误: {e}]"
         return ""
 
     def extract_frequency(self, freq_str):
@@ -296,32 +303,58 @@ class DeviceController:
 
     def read_thread(self):
         buffer = bytearray()
+        last_receive_time = time.time()
+        BUFFER_TIMEOUT = 1.0
+        
         while self.running:
             try:
-                chunk = self.ser.read(1)
+                # 批量读取优化：使用in_waiting获取可读字节数
+                if self.ser.in_waiting > 0:
+                    chunk = self.ser.read(min(self.ser.in_waiting, 1024))
+                else:
+                    # 检查buffer超时
+                    if buffer and (time.time() - last_receive_time) > BUFFER_TIMEOUT:
+                        line = f"[超时] 丢弃{len(buffer)}字节不完整数据: {buffer.hex().upper()}"
+                        self.text.insert(tk.END, line + "\n")
+                        self.log(line)
+                        buffer.clear()
+                    time.sleep(0.001)
+                    continue
+                
                 if not chunk:
                     continue
-                buffer.extend(chunk)
                 
-                # 打印原始数据（每收到16字节或遇到帧头时打印）
-                if len(buffer) % 16 == 0 or (len(buffer) >= 3 and buffer[-3:] == b'\x50\x53\x41'):
-                    line = f"<<< 原始数据: {buffer.hex().upper()}"
-                    self.text.insert(tk.END, line + "\n")
-                    self.log(line)
+                buffer.extend(chunk)
+                last_receive_time = time.time()
                 
                 # 处理AFDT1024设备回复（以0x50 0x53 0x41开头）
                 while len(buffer) >= 3:
                     if buffer[0] == 0x50 and buffer[1] == 0x53 and buffer[2] == 0x41:
                         # 解析AFDT1024格式的帧
-                        if len(buffer) < 7:  # 最小帧长度：3字节帧头 + 1字节ID + 1字节长度 + 1字节addr + 1字节校验和
+                        if len(buffer) < 7:
                             break
-                        # 获取长度字段
+                        
+                        # 帧长度校验：防止溢出
                         length = buffer[4]
-                        # 完整帧长度：3字节帧头 + 1字节ID + 1字节长度 + length字节数据 + 1字节校验和
+                        if length > 255:
+                            buffer.clear()
+                            line = "[错误] 长度字段异常，清空buffer"
+                            self.text.insert(tk.END, line + "\n")
+                            self.log(line)
+                            break
+                        
+                        # 完整帧长度
                         total_length = 3 + 1 + 1 + length + 1
+                        if total_length > 263:  # 最大帧长限制
+                            buffer.clear()
+                            line = "[错误] 帧长超限，清空buffer"
+                            self.text.insert(tk.END, line + "\n")
+                            self.log(line)
+                            break
+                        
                         if len(buffer) < total_length:
                             break
-                        # 提取完整帧
+                        
                         frame = bytes(buffer[:total_length])
                         del buffer[:total_length]
                         
@@ -329,22 +362,20 @@ class DeviceController:
                         self.text.insert(tk.END, line + "\n")
                         self.log(line)
                         
-                        # 解析AFDT1024回复
                         try:
                             parsed, msg = parse_afdt_response(frame)
                             line = f"<<< 解析结果: {msg}"
                             self.text.insert(tk.END, line + "\n")
                             self.log(line)
                             
-                            if msg == "OK":
-                                # 解析状态回复
-                                if len(parsed) > 0:
-                                    # 尝试解析为状态回复
-                                    status, status_msg = parse_status_response(parsed)
-                                    if status_msg == "OK":
-                                        extra = f"状态: PA_EN={status.get('pa_en', False)}, 电压={status.get('sys_vcc', 0)}V, 温度={status.get('sys_temp', 0)}°C"
+                            if msg == "OK" and parsed:
+                                if parsed.get('payload'):
+                                    status, status_msg = parse_status_response(parsed['payload'])
+                                    if status_msg == "OK" and status:
+                                        extra = f"状态: Rev={status.get('rev', 0)}, 电压={status.get('sys_vcc', 0)}V, 温度={status.get('sys_temp', 0)}°C, ATT_TC={status.get('att_tc', 0)}, MCU_VER={status.get('mcu_ver', 0)}"
                                         self.text.insert(tk.END, "    " + extra + "\n")
                                         self.log("    " + extra)
+                                        self.update_afdt_status(status)
                         except Exception as e:
                             line = f"<<< 解析失败: {str(e)}"
                             self.text.insert(tk.END, line + "\n")
@@ -370,16 +401,13 @@ class DeviceController:
                                     self.text.insert(tk.END, line + "\n")
                                     self.log(line)
 
-                                    if msg == "OK":
+                                    if msg == "OK" and parsed:
                                         cmd = parsed[0]
-                                        # 1) 原来的队列逻辑
                                         self.response_queue.put((cmd, parsed))
-                                        # 2) 打印字段
                                         extra = self.parse_fields(cmd, parsed)
                                         if extra:
                                             self.text.insert(tk.END, "    " + extra + "\n")
                                             self.log("    " + extra)
-                                        # 3) **立刻更新表格**（新增这段）
                                         name = self._cmd_name_map.get(cmd)
                                         if name:
                                             self.update_display(name, parsed)
@@ -390,7 +418,6 @@ class DeviceController:
 
                                 self.text.see(tk.END)
                             else:
-                                # 不是我们需要的帧，打印并丢弃
                                 byte = buffer.pop(0)
                                 line = f"<<< 丢弃字节: {byte:02X}"
                                 self.text.insert(tk.END, line + "\n")
@@ -422,6 +449,20 @@ class DeviceController:
             rx = int.from_bytes(data[3:5], 'big') / 10
             self.status_table.item(self.status_table.get_children()[4], values=("Tx衰减", f"{tx:.1f} dB"))
             self.status_table.item(self.status_table.get_children()[5], values=("Rx衰减", f"{rx:.1f} dB"))
+
+    def update_afdt_status(self, status):
+        """更新AFDT1024设备状态显示"""
+        try:
+            items = self.status_table.get_children()
+            if items:
+                self.status_table.item(items[0], values=("版本", f"Rev:{status.get('rev', 0)}"))
+                self.status_table.item(items[1], values=("温度", f"{status.get('sys_temp', 0)}°C"))
+                self.status_table.item(items[2], values=("TxLO", f"state:{status.get('state', 0)}"))
+                self.status_table.item(items[3], values=("RxLO", f"ATT_TC:{status.get('att_tc', 0)}"))
+                self.status_table.item(items[4], values=("Tx衰减", f"{status.get('sys_vcc', 0)}V"))
+                self.status_table.item(items[5], values=("Rx衰减", f"MCU:{status.get('mcu_ver', 0)}"))
+        except Exception as e:
+            self.text.insert(tk.END, f"[更新状态失败] {e}\n")
 
     def query_device_worker(self):
         if not self.ser or not self.ser.is_open:
@@ -567,13 +608,13 @@ class AFDT1024Controller:
         self.set_pa_btn = ttk.Button(master, text="应用", command=self.set_pa_enable)
         self.set_pa_btn.grid(row=9, column=2, padx=5, pady=5, sticky=tk.W)
 
-        # 相位校准
-        ttk.Label(master, text="相位偏移(0-63):").grid(row=10, column=0, padx=5, pady=5, sticky=tk.W)
-        self.phase_entry = ttk.Entry(master, width=5)
-        self.phase_entry.grid(row=10, column=1, padx=5, pady=5, sticky=tk.W)
-        self.phase_entry.insert(0, "0")
-        self.set_phase_btn = ttk.Button(master, text="校准", command=self.set_phase_cal)
-        self.set_phase_btn.grid(row=10, column=2, padx=5, pady=5, sticky=tk.W)
+        # 相位校准 (已隐藏)
+        # ttk.Label(master, text="相位偏移(0-63):").grid(row=10, column=0, padx=5, pady=5, sticky=tk.W)
+        # self.phase_entry = ttk.Entry(master, width=5)
+        # self.phase_entry.grid(row=10, column=1, padx=5, pady=5, sticky=tk.W)
+        # self.phase_entry.insert(0, "0")
+        # self.set_phase_btn = ttk.Button(master, text="校准", command=self.set_phase_cal)
+        # self.set_phase_btn.grid(row=10, column=2, padx=5, pady=5, sticky=tk.W)
 
         # 状态查询
         self.query_status_btn = ttk.Button(master, text="查询状态", command=self.query_status)
@@ -586,7 +627,7 @@ class AFDT1024Controller:
         self.status_table.heading("值", text="值")
         
         # 状态项
-        status_params = ["状态字", "输入电压(V)", "温度(°C)", "温补衰减", "系统版本"]
+        status_params = ["输入电压(V)", "温度(°C)"]
         for param in status_params:
             self.status_table.insert("", "end", values=(param, "N/A"))
 
@@ -724,23 +765,20 @@ class AFDT1024Controller:
         except ValueError:
             messagebox.showerror("参数错误", "请输入有效的设备ID")
 
-    def set_phase_cal(self):
-        if not self.ser or not self.ser.is_open:
-            messagebox.showwarning("未连接", "请先打开串口")
-            return
-
-        try:
-            device_id = int(self.id_entry.get())
-            phase_offset = int(self.phase_entry.get())
-
-            if not (0 <= phase_offset <= 63):
-                messagebox.showerror("参数错误", "相位偏移必须在0-63之间")
-                return
-
-            frame = build_phase_cal_frame(device_id, phase_offset)
-            self.send_frame(frame)
-        except ValueError:
-            messagebox.showerror("参数错误", "请输入有效的数字")
+    # def set_phase_cal(self):  # 已隐藏
+    #     if not self.ser or not self.ser.is_open:
+    #         messagebox.showwarning("未连接", "请先打开串口")
+    #         return
+    #     try:
+    #         device_id = int(self.id_entry.get())
+    #         phase_offset = int(self.phase_entry.get())
+    #         if not (0 <= phase_offset <= 63):
+    #             messagebox.showerror("参数错误", "相位偏移必须在0-63之间")
+    #             return
+    #         frame = build_phase_cal_frame(device_id, phase_offset)
+    #         self.send_frame(frame)
+    #     except ValueError:
+    #         messagebox.showerror("参数错误", "请输入有效的数字")
 
     def query_status(self):
         if not self.ser or not self.ser.is_open:
@@ -758,6 +796,8 @@ class AFDT1024Controller:
         buffer = bytearray()
         error_count = 0
         max_errors = 10
+        last_receive_time = time.time()
+        BUFFER_TIMEOUT = 1.0
         
         while self.running:
             try:
@@ -765,23 +805,28 @@ class AFDT1024Controller:
                     time.sleep(0.1)
                     continue
                 
-                chunk = self.ser.read(1)
+                # 批量读取优化
+                if self.ser.in_waiting > 0:
+                    chunk = self.ser.read(min(self.ser.in_waiting, 1024))
+                else:
+                    # 检查buffer超时
+                    if buffer and (time.time() - last_receive_time) > BUFFER_TIMEOUT:
+                        line = f"[超时] 丢弃{len(buffer)}字节不完整数据: {buffer.hex().upper()}"
+                        self.text.insert(tk.END, line + "\n")
+                        self.log(line)
+                        buffer.clear()
+                    time.sleep(0.001)
+                    continue
+                
                 if not chunk:
-                    time.sleep(0.001)  # 避免CPU占用过高
                     continue
                 
                 buffer.extend(chunk)
-                
-                # 打印原始数据（每收到16字节或遇到帧头时打印）
-                if len(buffer) % 16 == 0 or (len(buffer) >= 3 and buffer[-3:] == b'\x50\x53\x41'):
-                    line = f"<<< 原始数据: {buffer.hex().upper()}"
-                    self.text.insert(tk.END, line + "\n")
-                    self.log(line)
+                last_receive_time = time.time()
                 
                 # 寻找帧头
                 while len(buffer) >= 3:
                     if buffer[:3] != b'\x50\x53\x41':
-                        # 打印丢弃的字节
                         byte = buffer.pop(0)
                         line = f"<<< 丢弃字节: {byte:02X}"
                         self.text.insert(tk.END, line + "\n")
@@ -790,8 +835,22 @@ class AFDT1024Controller:
                     
                     # 尝试解析完整帧
                     if len(buffer) >= 6:
+                        # 帧长度校验
                         length = buffer[4]
-                        total_length = 5 + length + 1  # 帧头(3)+ID(1)+长度(1)+数据(length)+校验和(1)
+                        if length > 255:
+                            buffer.clear()
+                            line = "[错误] 长度字段异常，清空buffer"
+                            self.text.insert(tk.END, line + "\n")
+                            self.log(line)
+                            break
+                        
+                        total_length = 5 + length + 1
+                        if total_length > 263:
+                            buffer.clear()
+                            line = "[错误] 帧长超限，清空buffer"
+                            self.text.insert(tk.END, line + "\n")
+                            self.log(line)
+                            break
                         
                         if len(buffer) >= total_length:
                             frame = bytes(buffer[:total_length])
@@ -808,20 +867,20 @@ class AFDT1024Controller:
                                 self.log(line)
 
                                 if msg == "OK" and parsed:
-                                    # 处理状态响应
-                                    if parsed['addr'] == 0x5C and parsed['payload']:
+                                    if parsed.get('payload'):
                                         status_info, status_msg = parse_status_response(parsed['payload'])
                                         if status_msg == "OK" and status_info:
                                             self.update_status_display(status_info)
-                                            self.text.insert(tk.END, f"状态查询成功: {status_info}\n")
-                                            self.log(f"状态查询成功: {status_info}")
+                                            extra = f"状态: Rev={status_info.get('rev', 0)}, 电压={status_info.get('sys_vcc', 0)}V, 温度={status_info.get('sys_temp', 0)}°C"
+                                            self.text.insert(tk.END, "    " + extra + "\n")
+                                            self.log("    " + extra)
                             except Exception as e:
                                 line = f"<<< 解析失败: {str(e)}"
                                 self.text.insert(tk.END, line + "\n")
                                 self.log(line)
 
                     self.text.see(tk.END)
-                    error_count = 0  # 重置错误计数
+                    error_count = 0
             except Exception as e:
                 error_count += 1
                 if error_count <= max_errors:
@@ -833,7 +892,6 @@ class AFDT1024Controller:
                     self.text.insert(tk.END, err + "\n")
                     self.log(err)
                 
-                # 检查串口是否仍然打开
                 if not self.ser or not self.ser.is_open:
                     self.running = False
                     err = "[接收错误] 串口已关闭，停止接收线程"
@@ -841,17 +899,14 @@ class AFDT1024Controller:
                     self.log(err)
                     break
                 
-                time.sleep(0.1)  # 避免错误循环过快
+                time.sleep(0.1)
 
     def update_status_display(self, status_info):
         # 更新状态表格
         items = self.status_table.get_children()
         if items:
-            self.status_table.item(items[0], values=("状态字", f"0x{status_info['state']:04X}"))
-            self.status_table.item(items[1], values=("输入电压(V)", f"{status_info['sys_vcc']:.1f}"))
-            self.status_table.item(items[2], values=("温度(°C)", f"{status_info['sys_temp']}"))
-            self.status_table.item(items[3], values=("温补衰减", f"{status_info['att_tc']}"))
-            self.status_table.item(items[4], values=("系统版本", f"{status_info['mcu_ver']}"))
+            self.status_table.item(items[0], values=("输入电压(V)", f"{status_info.get('sys_vcc', 0):.1f}"))
+            self.status_table.item(items[1], values=("温度(°C)", f"{status_info.get('sys_temp', 0)}"))
 
     def clear_data(self):
         self.text.delete('1.0', tk.END)
@@ -935,13 +990,13 @@ class AFDR1024Controller:
         self.set_polarization_btn = ttk.Button(master, text="设置极化", command=self.set_polarization)
         self.set_polarization_btn.grid(row=8, column=1, columnspan=2, padx=5, pady=5, sticky=tk.W)
 
-        # 相位校准
-        ttk.Label(master, text="相位偏移(0-63):").grid(row=9, column=0, padx=5, pady=5, sticky=tk.W)
-        self.phase_entry = ttk.Entry(master, width=5)
-        self.phase_entry.grid(row=9, column=1, padx=5, pady=5, sticky=tk.W)
-        self.phase_entry.insert(0, "0")
-        self.set_phase_btn = ttk.Button(master, text="校准", command=self.set_phase_cal)
-        self.set_phase_btn.grid(row=9, column=2, padx=5, pady=5, sticky=tk.W)
+        # 相位校准 (已隐藏)
+        # ttk.Label(master, text="相位偏移(0-63):").grid(row=9, column=0, padx=5, pady=5, sticky=tk.W)
+        # self.phase_entry = ttk.Entry(master, width=5)
+        # self.phase_entry.grid(row=9, column=1, padx=5, pady=5, sticky=tk.W)
+        # self.phase_entry.insert(0, "0")
+        # self.set_phase_btn = ttk.Button(master, text="校准", command=self.set_phase_cal)
+        # self.set_phase_btn.grid(row=9, column=2, padx=5, pady=5, sticky=tk.W)
 
         # 状态查询
         self.query_status_btn = ttk.Button(master, text="查询状态", command=self.query_status)
@@ -954,7 +1009,7 @@ class AFDR1024Controller:
         self.status_table.heading("值", text="值")
         
         # 状态项
-        status_params = ["版本", "输入电压(V)", "温度(°C)", "温补衰减", "系统版本"]
+        status_params = ["输入电压(V)", "温度(°C)"]
         for param in status_params:
             self.status_table.insert("", "end", values=(param, "N/A"))
 
@@ -1079,21 +1134,18 @@ class AFDR1024Controller:
         except ValueError:
             messagebox.showerror("参数错误", "请输入有效的设备ID")
 
-    def set_phase_cal(self):
-        if not self.ser or not self.ser.is_open:
-            messagebox.showwarning("未连接", "请先打开串口")
-            return
-
-        try:
-            device_id = int(self.id_entry.get())
-            phase_offset = int(self.phase_entry.get())
-
-            if not (0 <= phase_offset <= 63):
-                messagebox.showerror("参数错误", "相位偏移必须在0-63之间")
-                return
-
-            frame = build_rx_phase_cal_frame(device_id, phase_offset)
-            self.send_frame(frame)
+    # def set_phase_cal(self):  # 已隐藏
+    #     if not self.ser or not self.ser.is_open:
+    #         messagebox.showwarning("未连接", "请先打开串口")
+    #         return
+    #     try:
+    #         device_id = int(self.id_entry.get())
+    #         phase_offset = int(self.phase_entry.get())
+    #         if not (0 <= phase_offset <= 63):
+    #             messagebox.showerror("参数错误", "相位偏移必须在0-63之间")
+    #             return
+    #         frame = build_rx_phase_cal_frame(device_id, phase_offset)
+    #         self.send_frame(frame)
         except ValueError:
             messagebox.showerror("参数错误", "请输入有效的数字")
 
@@ -1113,6 +1165,8 @@ class AFDR1024Controller:
         buffer = bytearray()
         error_count = 0
         max_errors = 10
+        last_receive_time = time.time()
+        BUFFER_TIMEOUT = 1.0
         
         while self.running:
             try:
@@ -1120,23 +1174,28 @@ class AFDR1024Controller:
                     time.sleep(0.1)
                     continue
                 
-                chunk = self.ser.read(1)
+                # 批量读取优化
+                if self.ser.in_waiting > 0:
+                    chunk = self.ser.read(min(self.ser.in_waiting, 1024))
+                else:
+                    # 检查buffer超时
+                    if buffer and (time.time() - last_receive_time) > BUFFER_TIMEOUT:
+                        line = f"[超时] 丢弃{len(buffer)}字节不完整数据: {buffer.hex().upper()}"
+                        self.text.insert(tk.END, line + "\n")
+                        self.log(line)
+                        buffer.clear()
+                    time.sleep(0.001)
+                    continue
+                
                 if not chunk:
-                    time.sleep(0.001)  # 避免CPU占用过高
                     continue
                 
                 buffer.extend(chunk)
-                
-                # 打印原始数据（每收到16字节或遇到帧头时打印）
-                if len(buffer) % 16 == 0 or (len(buffer) >= 3 and buffer[-3:] == b'\x50\x53\x41'):
-                    line = f"<<< 原始数据: {buffer.hex().upper()}"
-                    self.text.insert(tk.END, line + "\n")
-                    self.log(line)
+                last_receive_time = time.time()
                 
                 # 寻找帧头
                 while len(buffer) >= 3:
                     if buffer[:3] != b'\x50\x53\x41':
-                        # 打印丢弃的字节
                         byte = buffer.pop(0)
                         line = f"<<< 丢弃字节: {byte:02X}"
                         self.text.insert(tk.END, line + "\n")
@@ -1145,8 +1204,22 @@ class AFDR1024Controller:
                     
                     # 尝试解析完整帧
                     if len(buffer) >= 6:
+                        # 帧长度校验
                         length = buffer[4]
-                        total_length = 5 + length + 1  # 帧头(3)+ID(1)+长度(1)+数据(length)+校验和(1)
+                        if length > 255:
+                            buffer.clear()
+                            line = "[错误] 长度字段异常，清空buffer"
+                            self.text.insert(tk.END, line + "\n")
+                            self.log(line)
+                            break
+                        
+                        total_length = 5 + length + 1
+                        if total_length > 263:
+                            buffer.clear()
+                            line = "[错误] 帧长超限，清空buffer"
+                            self.text.insert(tk.END, line + "\n")
+                            self.log(line)
+                            break
                         
                         if len(buffer) >= total_length:
                             frame = bytes(buffer[:total_length])
@@ -1163,20 +1236,20 @@ class AFDR1024Controller:
                                 self.log(line)
 
                                 if msg == "OK" and parsed:
-                                    # 处理RX状态响应
-                                    if parsed['addr'] == 0x9C and parsed['payload']:
+                                    if parsed.get('payload'):
                                         status_info, status_msg = parse_rx_status_response(parsed['payload'])
                                         if status_msg == "OK" and status_info:
                                             self.update_status_display(status_info)
-                                            self.text.insert(tk.END, f"状态查询成功: {status_info}\n")
-                                            self.log(f"状态查询成功: {status_info}")
+                                            extra = f"状态: Rev={status_info.get('rev', 0)}, 电压={status_info.get('sys_vcc', 0)}V, 温度={status_info.get('sys_temp', 0)}°C"
+                                            self.text.insert(tk.END, "    " + extra + "\n")
+                                            self.log("    " + extra)
                             except Exception as e:
                                 line = f"<<< 解析失败: {str(e)}"
                                 self.text.insert(tk.END, line + "\n")
                                 self.log(line)
 
                     self.text.see(tk.END)
-                    error_count = 0  # 重置错误计数
+                    error_count = 0
             except Exception as e:
                 error_count += 1
                 if error_count <= max_errors:
@@ -1188,7 +1261,6 @@ class AFDR1024Controller:
                     self.text.insert(tk.END, err + "\n")
                     self.log(err)
                 
-                # 检查串口是否仍然打开
                 if not self.ser or not self.ser.is_open:
                     self.running = False
                     err = "[接收错误] 串口已关闭，停止接收线程"
@@ -1196,17 +1268,14 @@ class AFDR1024Controller:
                     self.log(err)
                     break
                 
-                time.sleep(0.1)  # 避免错误循环过快
+                time.sleep(0.1)
 
     def update_status_display(self, status_info):
         # 更新状态表格
         items = self.status_table.get_children()
         if items:
-            self.status_table.item(items[0], values=("版本", f"{status_info['rev']}"))
-            self.status_table.item(items[1], values=("输入电压(V)", f"{status_info['sys_vcc']:.1f}"))
-            self.status_table.item(items[2], values=("温度(°C)", f"{status_info['sys_temp']}"))
-            self.status_table.item(items[3], values=("温补衰减", f"{status_info['att_tc']}"))
-            self.status_table.item(items[4], values=("系统版本", f"{status_info['mcu_ver']}"))
+            self.status_table.item(items[0], values=("输入电压(V)", f"{status_info.get('sys_vcc', 0):.1f}"))
+            self.status_table.item(items[1], values=("温度(°C)", f"{status_info.get('sys_temp', 0)}"))
 
     def clear_data(self):
         self.text.delete('1.0', tk.END)
