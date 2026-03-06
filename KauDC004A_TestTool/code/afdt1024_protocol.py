@@ -245,48 +245,49 @@ def build_rx_status_query_command():
 def parse_status_response(payload):
     """解析状态查询响应
     返回字典包含状态信息
+    格式: [Rev][state][SysVcc][SysTemp][ATT_Tc][MCU_VER] (5-6字节)
+    - SysVcc: value × 0.1 V
+    - SysTemp: value - 80 (℃)
     """
-    if len(payload) < 10:
+    if len(payload) < 5:
         return None, "状态响应长度不足"
     
     try:
-        state = int.from_bytes(payload[0:2], 'big')
-        sys_vcc = int.from_bytes(payload[2:4], 'big') / 10.0  # 0.1V单位
-        sys_temp = payload[4] - 80  # 温度换算
-        att_tc = payload[5]
-        mcu_ver = int.from_bytes(payload[6:10], 'big')
+        result = {}
+        result['raw'] = payload.hex()
         
-        return {
-            'state': state,
-            'sys_vcc': sys_vcc,
-            'sys_temp': sys_temp,
-            'att_tc': att_tc,
-            'mcu_ver': mcu_ver
-        }, "OK"
+        result['rev'] = payload[0]
+        result['state'] = payload[1] if len(payload) > 1 else 0
+        result['sys_vcc'] = payload[2] * 0.1
+        result['sys_temp'] = payload[3] - 80
+        result['att_tc'] = payload[4]
+        result['mcu_ver'] = payload[5] if len(payload) > 5 else 0
+        
+        return result, "OK"
     except Exception as e:
         return None, f"解析状态响应错误: {str(e)}"
 
 def parse_rx_status_response(payload):
     """解析RX状态响应
     返回字典包含状态信息
+    格式: [Rev][SysVcc][SysTemp][ATT_Tc] (4字节) 或 5字节
+    - SysVcc: value × 0.1 V
+    - SysTemp: value - 80 (℃)
     """
-    if len(payload) < 5:
+    if len(payload) < 4:
         return None, "RX状态响应长度不足"
     
     try:
-        rev = payload[0]
-        sys_vcc = payload[1] / 10.0  # 0.1V单位
-        sys_temp = payload[2] - 80  # 温度换算
-        att_tc = payload[3]
-        mcu_ver = payload[4]
+        result = {}
+        result['raw'] = payload.hex()
         
-        return {
-            'rev': rev,
-            'sys_vcc': sys_vcc,
-            'sys_temp': sys_temp,
-            'att_tc': att_tc,
-            'mcu_ver': mcu_ver
-        }, "OK"
+        result['rev'] = payload[0]
+        result['sys_vcc'] = payload[1] * 0.1
+        result['sys_temp'] = payload[2] - 80
+        result['att_tc'] = payload[3]
+        result['mcu_ver'] = payload[4] if len(payload) > 4 else 0
+        
+        return result, "OK"
     except Exception as e:
         return None, f"解析RX状态响应错误: {str(e)}"
 
