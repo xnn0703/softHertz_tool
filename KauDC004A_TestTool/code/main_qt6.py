@@ -315,15 +315,16 @@ class KaUDCWorker(QThread):
                     self.response_signal.emit("版本回读", f"0x{version:02X}")
                 elif cmd == 0x0C:
                     temp_byte = data[1]
-                    if temp_byte >= 0x80:
-                        temperature = temp_byte - 0x80
-                    else:
-                        temperature = -(0x80 - temp_byte)
+                    temperature = temp_byte
+                    # if temp_byte >= 0x80:
+                    #     temperature = temp_byte - 0x80
+                    # else:
+                    #     temperature = -(0x80 - temp_byte)
                     self.status_signal.emit({"temperature": temperature})
                 elif cmd == 0x13:
-                    tx_lo = data[1]
-                    rx_lo = data[2]
-                    lock_st = data[3]
+                    tx_lo = int.from_bytes(data[1:3], "big")
+                    rx_lo = int.from_bytes(data[3:5], "big")
+                    lock_st = data[5]
                     self.response_signal.emit(
                         "本振查询", f"TxLO={tx_lo}, RxLO={rx_lo}, LOCK={lock_st:08b}"
                     )
@@ -612,7 +613,7 @@ class KaUDCPanel(DevicePanel):
                 att = int(param)
                 if 0 <= att <= 300:
                     att_bytes = att.to_bytes(2, "big")
-                    frame = kaudc_build_frame(bytes([0x14, 0x00, 0x00]) + att_bytes)
+                    frame = kaudc_build_frame(bytes([0x14, 0x00, 0x00, 0x00]) + att_bytes)
                 else:
                     QMessageBox.warning(
                         self, "警告", "衰减必须在0-300之间(0=0dB, 300=30dB)"
@@ -626,7 +627,7 @@ class KaUDCPanel(DevicePanel):
                 att = int(param)
                 if 0 <= att <= 300:
                     att_bytes = att.to_bytes(2, "big")
-                    frame = kaudc_build_frame(bytes([0x15, 0x00, 0x00]) + att_bytes)
+                    frame = kaudc_build_frame(bytes([0x15, 0x00, 0x00, 0x00]) + att_bytes)
                 else:
                     QMessageBox.warning(
                         self, "警告", "衰减必须在0-300之间(0=0dB, 300=30dB)"
@@ -662,9 +663,16 @@ class KaUDCPanel(DevicePanel):
             self.status_table.item(0, 1).setText(value)
         elif cmd_name == "本振查询":
             parts = value.split(", ")
-            if len(parts) == 2:
+            if len(parts) >= 2:
                 self.status_table.item(2, 1).setText(parts[0].split("=")[1])
                 self.status_table.item(3, 1).setText(parts[1].split("=")[1])
+            if len(parts) >= 3:
+                lock_str = parts[2].split("=")[1]
+                lock_bits = int(lock_str, 2)
+                rx_lock = "Locked" if (lock_bits & 0x01) else "Unlocked"
+                tx_lock = "Locked" if (lock_bits & 0x02) else "Unlocked"
+                ref_lock = "Locked" if (lock_bits & 0x04) else "Unlocked"
+                self.status_table.item(6, 1).setText(f"RX:{rx_lock} TX:{tx_lock} REF:{ref_lock}")
         elif cmd_name == "衰减查询":
             parts = value.split(", ")
             if len(parts) == 2:

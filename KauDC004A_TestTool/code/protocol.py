@@ -85,10 +85,11 @@ def decode_temperature(byte_val: int) -> int:
     Returns:
         Temperature in degrees Celsius
     """
-    if byte_val >= TEMP_OFFSET:
-        return byte_val - TEMP_OFFSET  # Positive temperature
-    else:
-        return -(TEMP_OFFSET - byte_val)  # Negative temperature
+    return byte_val 
+    # if byte_val >= TEMP_OFFSET:
+    #     return byte_val - TEMP_OFFSET  # Positive temperature
+    # else:
+    #     return -(TEMP_OFFSET - byte_val)  # Negative temperature
 
 
 def decode_att_db(byte_val: int) -> float:
@@ -206,18 +207,18 @@ def parse_response_data(data: bytes) -> dict:
         result["temperature"] = decode_temperature(data[1])
 
     elif cmd == CMD_RX_LO:
-        # Response: [0x0E][0x00][0x00][0x00][RxLO_Freq][0x00]
-        result["rx_lo"] = data[4]
+        # Response: [0x0E][0x00][0x00][0x00][RxLO_Freq_H][RxLO_Freq_L]
+        result["rx_lo"] = int.from_bytes(data[4:6], "big")
 
     elif cmd == CMD_TX_LO:
-        # Response: [0x12][0x00][0x00][0x00][TxLO_Freq][0x00]
-        result["tx_lo"] = data[4]
+        # Response: [0x12][0x00][0x00][0x00][TxLO_Freq_H][TxLO_Freq_L]
+        result["tx_lo"] = int.from_bytes(data[4:6], "big")
 
     elif cmd == CMD_LO_QUERY:
-        # Response: [0x13][TxLO_Freq][RxLO_Freq][LOCK_ST][0x00][0x00]
-        result["tx_lo"] = data[1]
-        result["rx_lo"] = data[2]
-        result["lock_status"] = data[3]
+        # Response: [0x13][TxLO_Freq_H][TxLO_Freq_L][RxLO_Freq_H][RxLO_Freq_L][LOCK_ST]
+        result["tx_lo"] = int.from_bytes(data[1:3], "big")
+        result["rx_lo"] = int.from_bytes(data[3:5], "big")
+        result["lock_status"] = data[5]
 
     elif cmd == CMD_TX_ATT:
         # Response: [0x14][0x00][0x00][0x00][Tx_ATT_H][Tx_ATT_L]
