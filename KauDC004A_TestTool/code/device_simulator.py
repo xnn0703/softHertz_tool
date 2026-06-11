@@ -72,9 +72,9 @@ def parse_frame(data):
 class TXSimulator:
     """TX设备模拟器"""
 
-    def __init__(self, port, device_id=1):
+    def __init__(self, port, ids=None):
         self.port = port
-        self.device_id = device_id
+        self.ids = list(ids) if ids else [1]  # 本总线模拟的子阵 ID 集合
         self.running = False
         self.ser = None
 
@@ -148,46 +148,44 @@ class TXSimulator:
             return
 
         addr = parsed["addr"]
+        target = parsed["device_id"]
+        masked = target & 0x7F  # 去掉 +128 位
 
-        # 根据地址处理
+        # ID=0 广播：所有子阵响应但不返回
+        if target == 0:
+            print(f"[{timestamp()}] [TX] 广播(ID=0)，不返回")
+            return
+        # 仅响应本总线上存在的子阵 ID
+        if masked not in self.ids:
+            return
+
         if addr == ADDR_STATUS_QUERY:
-            # 状态查询回复
-            response = self.build_status_response()
-            print(f"[{timestamp()}] [TX] 发送状态回复: {response.hex().upper()}")
+            response = self.build_status_response(masked)
+            print(f"[{timestamp()}] [TX] ID={masked} 状态回复: {response.hex().upper()}")
         else:
-            # Echo回复
-            response = frame
-            print(f"[{timestamp()}] [TX] 发送Echo: {response.hex().upper()}")
+            response = frame  # 配置 echo 原样返回
+            print(f"[{timestamp()}] [TX] ID={masked} Echo: {response.hex().upper()}")
 
         self.ser.write(response)
 
-    def build_status_response(self):
-        """构建TX状态查询回复"""
-        # TX状态回复格式 (5字节payload)
-        # [Rev][state][SysVcc][SysTemp][ATT_TC]
-        # 注意：状态查询回复没有addr字段！
-        # Rev=0x01, state=0x77, Vcc=11.9V(0x77), Temp=39°C(0x77-80=39), ATT_TC=0x01
-        payload = bytes([0x01, 0x77, 0x77, 0x77, 0x01])
+    def build_status_response(self, sub_id):
+        """构建 TX 状态查询回复（V2.1）。电压/温度随 sub_id 变化，便于区分多子阵。"""
+        # V2.1 TX 状态回复 (7字节payload，末尾为指令号 0x5C)
+        # [Rev][STATE][SysVcc][SysTemp][ATT_Tc][MCU_VER][指令号0x5C]
+        vcc = (115 + sub_id) & 0xFF  # 11.6V, 11.7V, ... 按 ID 递增
+        temp = (115 + sub_id) & 0xFF  # 36°C, 37°C, ... (值-80)
+        payload = bytes([0x01, 0x01, vcc, temp, 0x01, 0x02, ADDR_STATUS_QUERY])
 
-        # 构建帧（不包含checksum）
-        # 注意：length字段等于payload长度，没有addr
-        frame_data = (
-            FRAME_HEADER
-            + bytes([self.device_id])
-            + bytes([len(payload)])  # length = 5，payload长度
-            + payload
-        )
-        checksum = calculate_checksum(frame_data)
-
-        return frame_data + bytes([checksum])
+        frame_data = FRAME_HEADER + bytes([sub_id]) + bytes([len(payload)]) + payload
+        return frame_data + bytes([calculate_checksum(frame_data)])
 
 
 class RXSimulator:
     """RX设备模拟器"""
 
-    def __init__(self, port, device_id=1):
+    def __init__(self, port, ids=None):
         self.port = port
-        self.device_id = device_id
+        self.ids = list(ids) if ids else [1]  # 本总线模拟的子阵 ID 集合
         self.running = False
         self.ser = None
 
@@ -261,35 +259,34 @@ class RXSimulator:
             return
 
         addr = parsed["addr"]
+        target = parsed["device_id"]
+        masked = target & 0x7F
 
-        # 根据地址处理
+        if target == 0:
+            print(f"[{timestamp()}] [RX] 广播(ID=0)，不返回")
+            return
+        if masked not in self.ids:
+            return
+
         if addr == ADDR_RX_STATUS_QUERY:
-            # RX状态查询回复（带校验和bug）
-            response = self.build_rx_status_response_with_bug()
-            print(f"[{timestamp()}] [RX] 发送状态回复(含bug): {response.hex().upper()}")
+            response = self.build_rx_status_response(masked)
+            print(f"[{timestamp()}] [RX] ID={masked} 状态回复: {response.hex().upper()}")
         else:
-            # Echo回复
             response = frame
-            print(f"[{timestamp()}] [RX] 发送Echo: {response.hex().upper()}")
+            print(f"[{timestamp()}] [RX] ID={masked} Echo: {response.hex().upper()}")
 
         self.ser.write(response)
 
-    def build_rx_status_response_with_bug(self):
-        """构建RX状态查询回复（带校验和bug：不包含mcu_ver）"""
-        # Rev=0x4A, Vcc=11.5V(0x73), Temp=14°C(0x8E), ATT_TC=0x04, MCU_VER=0x02
-        payload = bytes([0x4A, 0x73, 0x8E, 0x04, 0x02])
+    def build_rx_status_response(self, sub_id):
+        """构建 RX 状态查询回复（V2.1，正常校验和）。电压/温度随 sub_id 变化。"""
+        # V2.1 RX 状态回复 (6字节payload，末尾为指令号 0x9C，无 STATE 字段)
+        # [Rev][SysVcc][SysTemp][ATT_Tc][MCU_VER][指令号0x9C]
+        vcc = (115 + sub_id) & 0xFF
+        temp = (130 + sub_id) & 0xFF
+        payload = bytes([0x4A, vcc, temp, 0x04, 0x02, ADDR_RX_STATUS_QUERY])
 
-        # 构建帧（不包含checksum）- 状态查询回复没有addr字段
-        frame_data = (
-            FRAME_HEADER + bytes([self.device_id]) + bytes([len(payload)]) + payload
-        )
-
-        # 设备端bug：校验和计算时不包含mcu_ver（payload的最后一个字节）
-        # 正常计算: sum(frame_data) & 0xFF
-        # bug计算: sum(frame_data[:-1]) & 0xFF  (不包含mcu_ver)
-        checksum = calculate_checksum(frame_data[:-1])
-
-        return frame_data + bytes([checksum])
+        frame_data = FRAME_HEADER + bytes([sub_id]) + bytes([len(payload)]) + payload
+        return frame_data + bytes([calculate_checksum(frame_data)])
 
 
 def list_com_ports():
@@ -330,9 +327,11 @@ def main():
     print("按 Ctrl+C 停止模拟器")
     print("=" * 50)
 
-    # 创建模拟器
-    tx_sim = TXSimulator(tx_port, device_id=1)
-    rx_sim = RXSimulator(rx_port, device_id=1)
+    # 模拟多子阵（演示用，可按需修改）
+    sim_ids = [1, 2, 3]
+    print(f"模拟子阵 ID: {sim_ids}")
+    tx_sim = TXSimulator(tx_port, ids=sim_ids)
+    rx_sim = RXSimulator(rx_port, ids=sim_ids)
 
     # 启动线程
     tx_thread = threading.Thread(target=tx_sim.start, daemon=True)
