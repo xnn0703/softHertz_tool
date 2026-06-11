@@ -2,8 +2,8 @@
 
 ## 版本信息
 - 协议代号：AFDT1024 Control Frame  
-- 版本：V1  
-- 日期：2025-12-23  
+- 版本：V2.1  
+- 日期：2026-03-17  
 
 ---
 
@@ -30,8 +30,8 @@
 | 帧头 | 3 Byte | 固定 0x50 0x53 0x41 |
 | ID | 1 Byte | 子阵 ID |
 | LEN | 1 Byte | DATA 长度 |
-| DATA | N Byte | 数据区（最低字节为 ADDR） |
-| CHECKSUM | 1 Byte | 前面所有字节求和取低 8 位 |
+| DATA | N Byte | 数据区（最低字节为 ADDR/指令号） |
+| CHECKSUM | 1 Byte | 除 CHECKSUM 外所有字节求和取低 8 位 |
 
 ---
 
@@ -47,21 +47,27 @@
 
 ## 4. 指令定义
 
+> 收到 4.1~4.5 配置指令后，设备按 ID 规则**原封不动返回**该帧。
+
 ### 4.1 TX 波束设置（ADDR = 0x50）
 
 - 数据长度：5 Byte  
 - 指令间隔建议 ≥ 2 ms  
 
+数据区（5 Byte，32bit 字段 D31~D0 + ADDR）：
 ```
-[FREQ][BeamV_H][BeamV_L][BeamH_H][BeamH_L][0x50]
+D31~D24 = FREQ[7:0]
+D23~D12 = BeamV[11:0]
+D11~D0  = BeamH[11:0]
+Byte0   = ADDR(0x50)
+```
+按字节（大端）：
+```
+[FREQ] [BeamV[11:4]] [BeamV[3:0]<<4 | BeamH[11:8]] [BeamH[7:0]] [0x50]
 ```
 
-- FREQ：0~70  
-- 实际频率：27500 + 50 × FREQ (MHz)
-
-角度补码：
-- 0~2047 → 0°~+180°
-- 2048~4095 → -180°~0°
+- FREQ：0~70，实际频率 = 27500 + 50 × FREQ (MHz)，范围 27500~31000  
+- BeamH/BeamV：12bit 补码，0~2047 → 0°~+180°，2048~4095 → −180°~0°  
 
 ---
 
@@ -73,8 +79,7 @@
 [TX_EN_ROW_H][TX_EN_ROW_L][0xFF][0xFF][0x51]
 ```
 
-- 0xFFFF：发射阵列开启  
-- 0x0000：发射阵列关闭  
+- TX_EN_ROW 共 16bit：全 1（0xFFFF）发射阵列开启，全 0（0x0000）关闭  
 
 ---
 
@@ -83,11 +88,10 @@
 - 数据长度：5 Byte  
 
 ```
-[POL][0x00][0x00][0x00][0x53]
+[reserved][reserved][reserved][POL][0x53]
 ```
 
-- POL = 0：LHCP  
-- POL = 1：RHCP  
+- POL = 0：LHCP；POL = 1：RHCP  
 
 ---
 
@@ -96,12 +100,11 @@
 - 数据长度：5 Byte  
 
 ```
-[PA_EN][0x00][0x00][0x00][0x56]
+[reserved][reserved][reserved][PA_EN][0x56]
 ```
 
-- PA_EN = 0：PA 关闭  
-- PA_EN = 1：PA 使能  
-- 上电默认：0  
+- PA_EN = 0：PA 关闭；PA_EN = 1：PA 使能；上电默认：0  
+- 注：阵列正常工作需把推动 PA 使能打开。  
 
 ---
 
@@ -110,59 +113,79 @@
 - 数据长度：5 Byte  
 
 ```
-[PS_Align][0x00][0x00][0x00][0x57]
+[reserved][reserved][reserved][PS_Align][0x57]
 ```
 
-- PS_Align：0~63  
-- 步进：5.625°  
-- 上电默认：0  
+- PS_Align：0~63，步进 5.625°（如 PS_Align=10 → 相位整体增加 56.25°）  
+- 上电默认：0；该指令不具备保存功能。  
 
 ---
 
 ### 4.6 ID 更新（ADDR = 0x20）
 
-- 数据长度：3 Byte  
-- 使用公共 ID（0x00）  
+- 数据长度：3 Byte，使用公共 ID（0x00）发送  
 
 ```
-[ID_new][0x00][0x20]
+[reserved][ID_new][0x20]
 ```
 
-- 默认出厂 ID：0x01  
-- 修改后需重新上电  
+- 默认出厂 ID：0x01；修改后需重新上下电验证。  
 
 ---
 
 ### 4.7 状态查询（ADDR = 0x5C）
 
-- 数据长度：1 Byte  
+- 查询命令数据长度：1 Byte，指令间隔建议 ≥ 3 ms  
 
 #### 查询命令
 ```
 [0x5C]
 ```
 
-#### 返回数据（LEN = 6）
+#### 返回数据（LEN = 7，**V2.1 末尾新增指令号**）
 ```
-[Rev][STATE][SysVcc][SysTemp][ATT_Tc][MCU_VER]
+[Rev][STATE][SysVcc][SysTemp][ATT_Tc][MCU_VER][0x5C]
 ```
 
-- STATE.B0：PA_EN 状态  
-- SysVcc：value × 0.1 V  
-- SysTemp：value − 80 (℃)  
+| 字段 | 说明 |
+|---|---|
+| Rev | 无意义 |
+| STATE | B0 = PA_EN 状态，其余保留 |
+| SysVcc | 实际电压 = 值 × 0.1 V |
+| SysTemp | 实际温度 = 值 − 80 (℃) |
+| ATT_Tc | BF 温补衰减值（仅查询用） |
+| MCU_VER | 系统版本号 |
+| 0x5C | 指令号 |
 
 ---
 
 ## 5. 波束计算模型
 
 ```
-ux = 180 × (f / f0) × sin(θ) × cos(φ)
-uy = 180 × (f / f0) × sin(θ) × sin(φ)
+Ux = 180 × (f / f0) × sin(θ) × cos(φ)        # θ 离轴角(俯仰), φ 方位角, 单位度
+Uy = 180 × (f / f0) × sin(θ) × sin(φ)
+BeamH = AngleToCode_12bit(Ux)
+BeamV = AngleToCode_12bit(Uy)
+
+AngleToCode_12bit(ang):
+    if ang >= 0:  code = round(ang × 2048 / 180)
+    else:         code = round(ang × 2048 / 180 + 4096)
+    return code mod 4096
 ```
 
 - Tx_f0 = 30000 MHz  
-- BeamH = ux（补码）  
-- BeamV = uy（补码）  
+
+### 计算结果示例
+| Freq(MHz) | θ(°) | φ(°) | BeamV | BeamH |
+|---|---|---|---|---|
+| 29500 | 0 | 0 | 0 | 0 |
+| 29500 | 30 | 0 | 0 | 1007 |
+| 29500 | 30 | 45 | 712 | 712 |
+| 29500 | 30 | 90 | 1007 | 0 |
+| 29500 | 30 | 135 | 712 | 3384 |
+| 29500 | 30 | 225 | 3384 | 3384 |
+| 29500 | 30 | 315 | 3384 | 712 |
+| 30000 | 30 | 45 | 724 | 724 |
 
 ---
 
@@ -174,8 +197,7 @@ uy = 180 × (f / f0) × sin(θ) × sin(φ)
 ...
 ```
 
-- 左列：0x01 ~ 0x0N  
-- 右列：0x11 ~ 0x1N  
+- 左列：0x01 ~ 0x0N；右列：0x11 ~ 0x1N  
 
 ---
 
@@ -184,3 +206,5 @@ uy = 180 × (f / f0) × sin(θ) × sin(φ)
 | 版本 | 说明 | 日期 |
 |---|---|---|
 | V1 | 初稿 | 2025-12-23 |
+| V2 | 修改波束指向说明，并增加计算结果示例 | 2026-03-11 |
+| V2.1 | 查询指令返回增加一个字节，返回指令号 | 2026-03-17 |

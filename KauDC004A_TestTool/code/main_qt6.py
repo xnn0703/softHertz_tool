@@ -56,6 +56,9 @@ from afdt1024_protocol import (
     POLARIZATION_LHCP,
     POLARIZATION_RHCP,
     ADDR_CMD_NAMES,
+    STATUS_RETURN_ADDRS,
+    ADDR_STATUS_QUERY,
+    ADDR_RX_STATUS_QUERY,
     FRAME_HEADER,
 )
 
@@ -188,42 +191,42 @@ class SerialWorker(QThread):
                 self._process_buffer()
 
     def _process_frame(self, frame):
-        """解析并处理帧"""
+        """解析并处理帧（V2.1：所有返回帧末尾为指令号 ADDR）"""
         try:
-            parsed, msg = parse_afdt_response(frame, has_rx_status_bug=False)
+            parsed, msg = parse_afdt_response(frame)
+            frame_hex = frame.hex().upper()
 
-            if not parsed and self.device_type == "RX":
-                parsed, msg = parse_afdt_response(frame, has_rx_status_bug=True)
+            if not parsed:
+                self.log_signal.emit(f"<<< 收到: {frame_hex}")
+                self.log_signal.emit(f"✗ 解析失败: {msg}")
+                return
 
-            if parsed:
-                addr = parsed.get("addr")
-                frame_hex = frame.hex().upper()
+            addr = parsed.get("addr")
 
-                if addr is not None and addr in ADDR_CMD_NAMES:
-                    cmd_name = ADDR_CMD_NAMES.get(addr, f"0x{addr:02X}")
+            if addr in STATUS_RETURN_ADDRS:
+                # 查询返回：0x5C=TX, 0x9C=RX
+                if addr == ADDR_STATUS_QUERY:
+                    status_info, status_msg = parse_status_response(parsed["payload"])
+                else:
+                    status_info, status_msg = parse_rx_status_response(parsed["payload"])
+
+                if status_msg == "OK" and status_info:
+                    status_info["device_id"] = parsed.get("device_id")
+                    sub_id = (parsed.get("device_id") or 0) & 0x7F
                     self.log_signal.emit(f"<<< 收到: {frame_hex}")
-                    self.log_signal.emit(f"✓ {cmd_name}配置成功")
-                elif addr is None:
-                    if self.device_type == "TX":
-                        status_info, status_msg = parse_status_response(
-                            parsed["payload"]
-                        )
-                    else:
-                        status_info, status_msg = parse_rx_status_response(
-                            parsed["payload"]
-                        )
-
-                    if status_msg == "OK" and status_info:
-                        self.log_signal.emit(f"<<< 收到: {frame_hex}")
-                        self.log_signal.emit(
-                            f"电压: {status_info.get('sys_vcc', 0):.1f}V, 温度: {status_info.get('sys_temp', 0)}°C"
-                        )
-                        self.status_signal.emit(status_info)
+                    self.log_signal.emit(
+                        f"[ID={sub_id}] 电压: {status_info.get('sys_vcc', 0):.1f}V, 温度: {status_info.get('sys_temp', 0)}°C"
+                    )
+                    self.status_signal.emit(status_info)
                 else:
                     self.log_signal.emit(f"<<< 收到: {frame_hex}")
+                    self.log_signal.emit(f"✗ 状态解析失败: {status_msg}")
+            elif addr in ADDR_CMD_NAMES:
+                cmd_name = ADDR_CMD_NAMES.get(addr, f"0x{addr:02X}")
+                self.log_signal.emit(f"<<< 收到: {frame_hex}")
+                self.log_signal.emit(f"✓ {cmd_name}配置成功")
             else:
-                self.log_signal.emit(f"<<< 收到: {frame.hex().upper()}")
-                self.log_signal.emit(f"✗ 解析失败: {msg}")
+                self.log_signal.emit(f"<<< 收到: {frame_hex}")
         except Exception as e:
             self.log_signal.emit(f"<<< 处理异常: {str(e)}")
 
@@ -411,6 +414,196 @@ class DevicePanel(QFrame):
         else:
             self._connect()
 
+    # ---- 子阵管理（多子阵：ID列表 + 目标 + ID模式）----
+
+    def _create_subarray_group(self):
+        """子阵设置组：ID列表输入 + 目标下拉 + 仅本子阵(+128)"""
+        group = QGroupBox("子阵设置")
+        v = QVBoxLayout()
+
+        # 阵列拼接：按协议编号规则自动生成 ID（左列 0x01~0x0N，右列 0x11~0x1N）
+        row0 = QHBoxLayout()
+        row0.addWidget(QLabel("阵列拼接:"))
+        self.cols_cb = QComboBox()
+        self.cols_cb.addItems(["1列", "2列"])
+        row0.addWidget(self.cols_cb)
+        row0.addWidget(QLabel("每列子阵数:"))
+        self.rows_spin = QSpinBox()
+        self.rows_spin.setRange(1, 15)
+        self.rows_spin.setValue(1)
+        row0.addWidget(self.rows_spin)
+        gen_btn = QPushButton("生成ID")
+        gen_btn.clicked.connect(self._on_gen_ids)
+        row0.addWidget(gen_btn)
+        row0.addStretch()
+        v.addLayout(row0)
+
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("子阵ID列表:"))
+        self.id_list_edit = QLineEdit("1")
+        self.id_list_edit.setPlaceholderText("逗号分隔, 如 1,2,17,18")
+        self.id_list_edit.editingFinished.connect(self._on_id_list_changed)
+        row1.addWidget(self.id_list_edit)
+        v.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("目标:"))
+        self.target_cb = QComboBox()
+        row2.addWidget(self.target_cb)
+        self.plus128_cb = QCheckBox("仅本子阵(+128)")
+        row2.addWidget(self.plus128_cb)
+        row2.addStretch()
+        v.addLayout(row2)
+
+        group.setLayout(v)
+        self._refresh_target_combo()
+        return group
+
+    def _parse_id_list(self):
+        """解析 ID 列表输入 -> 去重排序的 [int]（1~127）"""
+        ids = []
+        for tok in self.id_list_edit.text().replace("，", ",").split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            try:
+                val = int(tok, 0)
+            except ValueError:
+                continue
+            if 1 <= val <= 127 and val not in ids:
+                ids.append(val)
+        return sorted(ids)
+
+    @staticmethod
+    def _gen_subarray_ids(cols, n):
+        """按协议拼接编号规则生成子阵 ID。
+
+        左列(col=0): 0x01~0x0N；右列(col=1): 0x11~0x1N。
+        ID = (列号<<4) | 行号，列号 0=左/1=右，行号 1~N（从下到上）。
+        """
+        ids = []
+        for col in range(cols):
+            for row in range(1, n + 1):
+                ids.append((col << 4) | row)
+        return ids
+
+    def _on_gen_ids(self):
+        cols = self.cols_cb.currentIndex() + 1  # "1列"->1, "2列"->2
+        n = self.rows_spin.value()
+        ids = self._gen_subarray_ids(cols, n)
+        self.id_list_edit.setText(",".join(str(i) for i in ids))
+        self._on_id_list_changed()
+
+    def _on_id_list_changed(self):
+        self._refresh_target_combo()
+        self._rebuild_status_table()
+
+    def _refresh_target_combo(self):
+        if not hasattr(self, "target_cb"):
+            return
+        cur = self.target_cb.currentText()
+        self.target_cb.blockSignals(True)
+        self.target_cb.clear()
+        self.target_cb.addItem("全部(广播 ID=0)")
+        for i in self._parse_id_list():
+            self.target_cb.addItem(str(i))
+        idx = self.target_cb.findText(cur)
+        if idx >= 0:
+            self.target_cb.setCurrentIndex(idx)
+        self.target_cb.blockSignals(False)
+
+    def _get_target_device_id(self):
+        """配置指令目标 device_id：全部→0(广播)；指定ID→ID(勾+128则 ID+128)"""
+        txt = self.target_cb.currentText()
+        if txt.startswith("全部"):
+            return 0
+        try:
+            base = int(txt)
+        except ValueError:
+            return 0
+        if self.plus128_cb.isChecked():
+            return (base + 128) & 0xFF
+        return base
+
+    # ---- 状态表格（每个子阵 ID 一行）----
+
+    def _create_status_group(self, columns):
+        """状态表格组。columns 首列为 ID。含"查询全部状态"按钮。"""
+        self._status_columns = columns
+        group = QGroupBox("状态")
+        v = QVBoxLayout()
+
+        self.status_table = QTableWidget(0, len(columns))
+        self.status_table.setHorizontalHeaderLabels(columns)
+        self.status_table.verticalHeader().setVisible(False)
+        self.status_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.status_table.setMinimumHeight(140)  # 默认可见约 4~5 行，更多则滚动
+        for c in range(len(columns)):
+            self.status_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
+        v.addWidget(self.status_table)
+
+        self.query_btn = QPushButton("查询全部状态")
+        self.query_btn.clicked.connect(self._on_query_status)
+        v.addWidget(self.query_btn)
+
+        group.setLayout(v)
+        self._rebuild_status_table()
+        return group
+
+    def _rebuild_status_table(self):
+        if not hasattr(self, "status_table"):
+            return
+        ids = self._parse_id_list()
+        self._status_rows = {}
+        self.status_table.setRowCount(len(ids))
+        for row, i in enumerate(ids):
+            self._status_rows[i] = row
+            self.status_table.setItem(row, 0, QTableWidgetItem(str(i)))
+            for c in range(1, len(self._status_columns)):
+                self.status_table.setItem(row, c, QTableWidgetItem("N/A"))
+
+    def _update_status_row(self, status_info):
+        """按 device_id 路由到对应行更新电压/温度(/PA)"""
+        dev = status_info.get("device_id")
+        if dev is None:
+            return
+        sub_id = dev & 0x7F  # 去掉可能的 +128
+        row = getattr(self, "_status_rows", {}).get(sub_id)
+        if row is None:
+            return
+        self.status_table.setItem(
+            row, 1, QTableWidgetItem(f"{status_info.get('sys_vcc', 0):.1f}")
+        )
+        self.status_table.setItem(
+            row, 2, QTableWidgetItem(str(status_info.get("sys_temp", 0)))
+        )
+        if len(self._status_columns) >= 4 and "pa_en" in status_info:
+            self.status_table.setItem(
+                row, 3, QTableWidgetItem("ON" if status_info["pa_en"] else "OFF")
+            )
+
+    def _on_query_status(self):
+        """逐个 ID 发状态查询"""
+        if not self.worker or not self.worker.running:
+            QMessageBox.warning(self, "警告", "请先打开串口")
+            return
+        ids = self._parse_id_list()
+        if not ids:
+            QMessageBox.warning(self, "警告", "请先填写子阵ID列表")
+            return
+        plus = self.plus128_cb.isChecked()
+        for i in ids:
+            dev = (i + 128) & 0xFF if plus else i
+            try:
+                self.worker.send_frame(self._build_status_query_frame(dev))
+                QThread.msleep(50)
+            except Exception as e:
+                self.log_text.appendPlainText(f"查询ID={i}失败: {e}")
+        self.log_text.appendPlainText(f">>> 已查询 {len(ids)} 个子阵状态")
+
+    def _build_status_query_frame(self, device_id):
+        raise NotImplementedError
+
     def _connect(self):
         port = self.port_cb.currentText()
         if not port:
@@ -434,7 +627,7 @@ class DevicePanel(QFrame):
         self.log_text.appendPlainText(msg)
 
     def _on_status(self, status_info):
-        raise NotImplementedError
+        self._update_status_row(status_info)
 
     def closeEvent(self, event):
         if self.worker:
@@ -697,16 +890,8 @@ class TXPanel(DevicePanel):
         # 串口设置
         self._create_serial_settings(layout)
 
-        # 子阵ID
-        id_group = QGroupBox("子阵设置")
-        id_layout = QHBoxLayout()
-        id_layout.addWidget(QLabel("子阵ID:"))
-        self.id_spin = QSpinBox()
-        self.id_spin.setRange(1, 255)
-        self.id_spin.setValue(1)
-        id_layout.addWidget(self.id_spin)
-        id_group.setLayout(id_layout)
-        layout.addWidget(id_group)
+        # 子阵设置（ID列表 + 目标 + ID模式）
+        layout.addWidget(self._create_subarray_group())
 
         # 波束设置
         beam_group = QGroupBox("TX波束设置")
@@ -767,20 +952,13 @@ class TXPanel(DevicePanel):
         pol_group.setLayout(pol_layout)
         layout.addWidget(pol_group)
 
-        # 状态查询
-        self.query_btn = QPushButton("查询状态")
-        self.query_btn.clicked.connect(self._on_query_status)
-        layout.addWidget(self.query_btn)
-
-        # 状态显示
-        status_group = QGroupBox("状态")
-        status_layout = QFormLayout()
-        self.voltage_label = QLabel("N/A")
-        self.temp_label = QLabel("N/A")
-        status_layout.addRow("输入电压(V):", self.voltage_label)
-        status_layout.addRow("温度(°C):", self.temp_label)
-        status_group.setLayout(status_layout)
-        layout.addWidget(status_group)
+        # 状态表格（每个子阵 ID 一行）+ 查询全部
+        _cols = (
+            ["ID", "电压(V)", "温度(°C)", "PA"]
+            if self.device_type == "TX"
+            else ["ID", "电压(V)", "温度(°C)"]
+        )
+        layout.addWidget(self._create_status_group(_cols))
 
         # 日志窗口
         log_group = QGroupBox("日志")
@@ -809,7 +987,7 @@ class TXPanel(DevicePanel):
             QMessageBox.warning(self, "警告", "请先打开串口")
             return
         try:
-            device_id = self.id_spin.value()
+            device_id = self._get_target_device_id()
             freq = float(self.freq_entry.text())
             theta = float(self.theta_entry.text())
             phi = float(self.phi_entry.text())
@@ -839,7 +1017,7 @@ class TXPanel(DevicePanel):
             QMessageBox.warning(self, "警告", "请先打开串口")
             return
         try:
-            device_id = self.id_spin.value()
+            device_id = self._get_target_device_id()
             enable = self.array_enable_cb.isChecked()
             frame = build_tx_enable_frame(device_id, enable)
             self.worker.send_frame(frame)
@@ -852,7 +1030,7 @@ class TXPanel(DevicePanel):
             QMessageBox.warning(self, "警告", "请先打开串口")
             return
         try:
-            device_id = self.id_spin.value()
+            device_id = self._get_target_device_id()
             enable = self.pa_enable_cb.isChecked()
             frame = build_pa_enable_frame(device_id, enable)
             self.worker.send_frame(frame)
@@ -865,7 +1043,7 @@ class TXPanel(DevicePanel):
             QMessageBox.warning(self, "警告", "请先打开串口")
             return
         try:
-            device_id = self.id_spin.value()
+            device_id = self._get_target_device_id()
             pol = POLARIZATION_RHCP if self.pol_rhcp.isChecked() else POLARIZATION_LHCP
             frame = build_tx_polarization_frame(device_id, pol)
             self.worker.send_frame(frame)
@@ -873,23 +1051,8 @@ class TXPanel(DevicePanel):
         except Exception as e:
             QMessageBox.warning(self, "警告", str(e))
 
-    def _on_query_status(self):
-        if not self.worker or not self.worker.running:
-            QMessageBox.warning(self, "警告", "请先打开串口")
-            return
-        try:
-            device_id = self.id_spin.value()
-            frame = build_status_query_frame(device_id)
-            self.worker.send_frame(frame)
-            self.log_text.appendPlainText(f">>> 发送状态查询")
-        except Exception as e:
-            QMessageBox.warning(self, "警告", str(e))
-
-    def _on_status(self, status_info):
-        vcc = status_info.get("sys_vcc", 0)
-        temp = status_info.get("sys_temp", 0)
-        self.voltage_label.setText(f"{vcc:.1f}")
-        self.temp_label.setText(f"{temp}")
+    def _build_status_query_frame(self, device_id):
+        return build_status_query_frame(device_id)
 
     def _on_config_success(self, cmd_name):
         pass
@@ -912,16 +1075,8 @@ class RXPanel(DevicePanel):
         # 串口设置
         self._create_serial_settings(layout)
 
-        # 子阵ID
-        id_group = QGroupBox("子阵设置")
-        id_layout = QHBoxLayout()
-        id_layout.addWidget(QLabel("子阵ID:"))
-        self.id_spin = QSpinBox()
-        self.id_spin.setRange(1, 255)
-        self.id_spin.setValue(1)
-        id_layout.addWidget(self.id_spin)
-        id_group.setLayout(id_layout)
-        layout.addWidget(id_group)
+        # 子阵设置（ID列表 + 目标 + ID模式）
+        layout.addWidget(self._create_subarray_group())
 
         # 波束设置
         beam_group = QGroupBox("RX波束设置")
@@ -971,20 +1126,13 @@ class RXPanel(DevicePanel):
         pol_group.setLayout(pol_layout)
         layout.addWidget(pol_group)
 
-        # 状态查询
-        self.query_btn = QPushButton("查询状态")
-        self.query_btn.clicked.connect(self._on_query_status)
-        layout.addWidget(self.query_btn)
-
-        # 状态显示
-        status_group = QGroupBox("状态")
-        status_layout = QFormLayout()
-        self.voltage_label = QLabel("N/A")
-        self.temp_label = QLabel("N/A")
-        status_layout.addRow("输入电压(V):", self.voltage_label)
-        status_layout.addRow("温度(°C):", self.temp_label)
-        status_group.setLayout(status_layout)
-        layout.addWidget(status_group)
+        # 状态表格（每个子阵 ID 一行）+ 查询全部
+        _cols = (
+            ["ID", "电压(V)", "温度(°C)", "PA"]
+            if self.device_type == "TX"
+            else ["ID", "电压(V)", "温度(°C)"]
+        )
+        layout.addWidget(self._create_status_group(_cols))
 
         # 日志窗口
         log_group = QGroupBox("日志")
@@ -1013,7 +1161,7 @@ class RXPanel(DevicePanel):
             QMessageBox.warning(self, "警告", "请先打开串口")
             return
         try:
-            device_id = self.id_spin.value()
+            device_id = self._get_target_device_id()
             freq = float(self.freq_entry.text())
             theta = float(self.theta_entry.text())
             phi = float(self.phi_entry.text())
@@ -1030,7 +1178,7 @@ class RXPanel(DevicePanel):
                 return
 
             beam_h, beam_v = calculate_beam_values(theta, phi, freq, is_tx=False)
-            frame = build_rx_beam_frame(device_id, freq_num, beam_v, beam_h)
+            frame = build_rx_beam_frame(device_id, freq_num, beam_h, beam_v)
             self.log_text.appendPlainText(
                 f">>> 发送波束设置: BeamH={beam_h}, BeamV={beam_v}"
             )
@@ -1043,7 +1191,7 @@ class RXPanel(DevicePanel):
             QMessageBox.warning(self, "警告", "请先打开串口")
             return
         try:
-            device_id = self.id_spin.value()
+            device_id = self._get_target_device_id()
             enable = self.array_enable_cb.isChecked()
             frame = build_rx_enable_frame(device_id, enable)
             self.worker.send_frame(frame)
@@ -1059,7 +1207,7 @@ class RXPanel(DevicePanel):
             QMessageBox.warning(self, "警告", "请先打开串口")
             return
         try:
-            device_id = self.id_spin.value()
+            device_id = self._get_target_device_id()
             pol = POLARIZATION_RHCP if self.pol_rhcp.isChecked() else POLARIZATION_LHCP
             frame = build_rx_polarization_frame(device_id, pol)
             self.worker.send_frame(frame)
@@ -1067,23 +1215,8 @@ class RXPanel(DevicePanel):
         except Exception as e:
             QMessageBox.warning(self, "警告", str(e))
 
-    def _on_query_status(self):
-        if not self.worker or not self.worker.running:
-            QMessageBox.warning(self, "警告", "请先打开串口")
-            return
-        try:
-            device_id = self.id_spin.value()
-            frame = build_rx_status_query_frame(device_id)
-            self.worker.send_frame(frame)
-            self.log_text.appendPlainText(f">>> 发送状态查询")
-        except Exception as e:
-            QMessageBox.warning(self, "警告", str(e))
-
-    def _on_status(self, status_info):
-        vcc = status_info.get("sys_vcc", 0)
-        temp = status_info.get("sys_temp", 0)
-        self.voltage_label.setText(f"{vcc:.1f}")
-        self.temp_label.setText(f"{temp}")
+    def _build_status_query_frame(self, device_id):
+        return build_rx_status_query_frame(device_id)
 
     def _on_config_success(self, cmd_name):
         pass
