@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QMessageBox,
     QFrame,
+    QScrollArea,
 )
 from PySide6.QtCore import QThread, Signal, Slot, QTimer, Qt
 from PySide6.QtGui import QFont
@@ -215,7 +216,7 @@ class SerialWorker(QThread):
                     sub_id = (parsed.get("device_id") or 0) & 0x7F
                     self.log_signal.emit(f"<<< 收到: {frame_hex}")
                     self.log_signal.emit(
-                        f"[ID={sub_id}] 电压: {status_info.get('sys_vcc', 0):.1f}V, 温度: {status_info.get('sys_temp', 0)}°C"
+                        f"[ID=0x{sub_id:02X}] 电压: {status_info.get('sys_vcc', 0):.1f}V, 温度: {status_info.get('sys_temp', 0)}°C"
                     )
                     self.status_signal.emit(status_info)
                 else:
@@ -440,8 +441,8 @@ class DevicePanel(QFrame):
 
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("子阵ID列表:"))
-        self.id_list_edit = QLineEdit("1")
-        self.id_list_edit.setPlaceholderText("逗号分隔, 如 1,2,17,18")
+        self.id_list_edit = QLineEdit("0x01")
+        self.id_list_edit.setPlaceholderText("逗号分隔(十六进制), 如 0x01,0x02,0x11")
         self.id_list_edit.editingFinished.connect(self._on_id_list_changed)
         row1.addWidget(self.id_list_edit)
         v.addLayout(row1)
@@ -475,6 +476,11 @@ class DevicePanel(QFrame):
         return sorted(ids)
 
     @staticmethod
+    def _fmt_id(i):
+        """子阵 ID 以两位十六进制显示，便于与协议编号核验"""
+        return f"0x{i:02X}"
+
+    @staticmethod
     def _gen_subarray_ids(cols, n):
         """按协议拼接编号规则生成子阵 ID。
 
@@ -491,7 +497,7 @@ class DevicePanel(QFrame):
         cols = self.cols_cb.currentIndex() + 1  # "1列"->1, "2列"->2
         n = self.rows_spin.value()
         ids = self._gen_subarray_ids(cols, n)
-        self.id_list_edit.setText(",".join(str(i) for i in ids))
+        self.id_list_edit.setText(",".join(self._fmt_id(i) for i in ids))
         self._on_id_list_changed()
 
     def _on_id_list_changed(self):
@@ -506,7 +512,7 @@ class DevicePanel(QFrame):
         self.target_cb.clear()
         self.target_cb.addItem("全部(广播 ID=0)")
         for i in self._parse_id_list():
-            self.target_cb.addItem(str(i))
+            self.target_cb.addItem(self._fmt_id(i))
         idx = self.target_cb.findText(cur)
         if idx >= 0:
             self.target_cb.setCurrentIndex(idx)
@@ -518,7 +524,7 @@ class DevicePanel(QFrame):
         if txt.startswith("全部"):
             return 0
         try:
-            base = int(txt)
+            base = int(txt, 0)
         except ValueError:
             return 0
         if self.plus128_cb.isChecked():
@@ -558,7 +564,7 @@ class DevicePanel(QFrame):
         self.status_table.setRowCount(len(ids))
         for row, i in enumerate(ids):
             self._status_rows[i] = row
-            self.status_table.setItem(row, 0, QTableWidgetItem(str(i)))
+            self.status_table.setItem(row, 0, QTableWidgetItem(self._fmt_id(i)))
             for c in range(1, len(self._status_columns)):
                 self.status_table.setItem(row, c, QTableWidgetItem("N/A"))
 
@@ -598,7 +604,7 @@ class DevicePanel(QFrame):
                 self.worker.send_frame(self._build_status_query_frame(dev))
                 QThread.msleep(50)
             except Exception as e:
-                self.log_text.appendPlainText(f"查询ID={i}失败: {e}")
+                self.log_text.appendPlainText(f"查询ID=0x{i:02X}失败: {e}")
         self.log_text.appendPlainText(f">>> 已查询 {len(ids)} 个子阵状态")
 
     def _build_status_query_frame(self, device_id):
@@ -1233,23 +1239,23 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("SoftHertz AFDTR Tool")
         self.setGeometry(100, 100, 1200, 700)
 
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        # 横向滚动区包裹三面板：窗口变窄/变矮时出现滚动条，而非压缩内容
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        self.setCentralWidget(scroll)
 
+        container = QWidget()
         main_layout = QHBoxLayout()
-        central_widget.setLayout(main_layout)
+        container.setLayout(main_layout)
+        scroll.setWidget(container)
 
-        # KaUDC004A 面板
+        # KaUDC004A / TX / RX 面板（各设最小宽度，避免被压缩）
         self.kaudc_panel = KaUDCPanel()
-        main_layout.addWidget(self.kaudc_panel, 1)
-
-        # TX面板
         self.tx_panel = TXPanel()
-        main_layout.addWidget(self.tx_panel, 1)
-
-        # RX面板
         self.rx_panel = RXPanel()
-        main_layout.addWidget(self.rx_panel, 1)
+        for p in (self.kaudc_panel, self.tx_panel, self.rx_panel):
+            p.setMinimumWidth(400)
+            main_layout.addWidget(p)
 
     def closeEvent(self, event):
         self.kaudc_panel._disconnect()
