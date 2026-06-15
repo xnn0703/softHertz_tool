@@ -403,7 +403,25 @@ class DevicePanel(QFrame):
     def _setup_ui(self, title):
         raise NotImplementedError
 
+    def _panel_title(self):
+        """面板顶部标题文案，按设备类型区分"""
+        return {
+            "KaUDC": "KauDC004A",
+            "TX": "Ka1024_TX (AFDT1024)",
+            "RX": "Ka1024_RX (AFDR1024)",
+        }.get(self.device_type, self.device_type)
+
+    def _create_title(self, text):
+        """醒目的面板标题 QLabel（样式由全局 QSS #panelTitle 控制）"""
+        label = QLabel(text)
+        label.setObjectName("panelTitle")
+        label.setAlignment(Qt.AlignCenter)
+        return label
+
     def _create_serial_settings(self, layout):
+        # 面板标题（醒目区分三个设备）
+        layout.addWidget(self._create_title(self._panel_title()))
+
         serial_group = QGroupBox("串口设置")
         serial_layout = QHBoxLayout()
 
@@ -1334,8 +1352,37 @@ class MainWindow(QMainWindow):
 # 入口
 # ============================================================
 
+# 仅保留低调的面板标题样式，其余交给原生/Fusion 样式（保持 macOS 截图那种干净观感）
+QSS_STYLE = """
+QLabel#panelTitle {
+    font-size: 13pt;
+    font-weight: bold;
+    color: #1a2a44;
+    padding: 4px 0;
+    border-bottom: 2px solid #c0c8d4;
+}
+"""
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+
+    # macOS 保持原生 Aqua 样式（干净好看）；仅 Windows 用 Fusion 替代默认
+    # windowsvista 样式，让 Win 上也接近 mac 的清爽观感
+    if sys.platform.startswith("win"):
+        app.setStyle("Fusion")
+
+    # 字体：中文回退链（Win 雅黑 / mac 苹方 / Linux Noto）
+    _font = QFont()
+    _font.setFamilies(
+        ["Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "sans-serif"]
+    )
+    _font.setPointSize(10)
+    app.setFont(_font)
+
+    # 仅面板标题用一点点样式，其余保持原生干净外观
+    app.setStyleSheet(QSS_STYLE)
+
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
