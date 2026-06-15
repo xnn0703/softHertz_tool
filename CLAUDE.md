@@ -59,12 +59,13 @@ python build_spec.py
 - 命令码常量：`0x0B` 版本、`0x0C` 温度、`0x0E`/`0x12` 收/发本振、`0x13` 本振查询、`0x14`/`0x15` 收发衰减、`0x16` 衰减查询。
 - 衰减范围 0~300（值/10 = dB）。
 
-### `afdt1024_protocol.py`（AFDT1024/AFDR1024 协议 **V2.1**，纯函数）
+### `afdt1024_protocol.py`（AFDT1024/AFDR1024 协议 **V2.2**，纯函数）
 - **变长帧**：帧头 `"PSA"`(`50 53 41`) + device_id(1) + length(1) + payload + addr(1) + **求和校验**(`sum & 0xFF`，**不是 CRC**；除 CheckSum 外全字段求和)。
 - **V2.1：所有返回帧末尾都是指令号(ADDR)**。`parse_response(frame)` 返回 `{device_id, addr, payload}`，统一取末尾字节为 addr：`addr ∈ CONFIG_ECHO_ADDRS` → 配置 echo；`addr==0x5C` → TX 状态返回；`addr==0x9C` → RX 状态返回（见 `STATUS_RETURN_ADDRS`）。查询返回数据长度 TX=7 / RX=6（V2.1 在末尾**新增了指令号字节**）。
 - 配置命令地址：TX `0x50/0x51/0x53/0x56/0x57`、RX `0x90/0x91/0x93/0x97`、ID更新 `0x20`。
+- **查询指令**：查询1(状态) `0x5C`(TX)/`0x9C`(RX) 返回电压/温度/PA；**V2.2 查询2(波束参数)** `0x5F`(TX)/`0x9F`(RX) 返回 POL/EN_ROW/FREQ/BeamV/BeamH（`parse_beam_query_response`，返回帧由 `BEAM_QUERY_RETURN_ADDRS` 标识）。
 - 波束帧内布局 `FREQ | BeamV[11:0] | BeamH[11:0]`；`build_*_beam_frame` 参数顺序**已统一**为 `(device_id, freq, beam_h, beam_v)`。
-- `calculate_beam_values(theta, phi, freq, is_tx)` → `(beam_h, beam_v)`：`AngleToCode_12bit(180×f/f0×sinθ×cosφ 或 sinφ)`，`round(ang×2048/180)`、负数 +4096、mod 4096；f0 TX=30000 / RX=20270 MHz。
+- `calculate_beam_values(theta, phi, freq, is_tx)` → `(beam_h, beam_v)`：`AngleToCode_12bit(180×f/f0×sinθ×cosφ 或 sinφ)`，`round(ang×2048/180)`、负数 +4096、mod 4096；f0 TX=30000 / RX=20270 MHz。**freq 必须用量化到 50MHz 步进的实际频率**(`27500/17700 + 50×freq_num`)，否则设置↔回读角度有系统偏差（`_on_set_beam` 已处理）。`beam_code_to_angle` 为其反算（码值→θ/φ，UI 现仅显示 BeamV/BeamH 码值）。
 - **不兼容旧协议**（含历史 RX 校验和 bug，已移除）。
 
 ### `device_simulator.py`（TX/RX 设备模拟器，支持多子阵）
@@ -76,7 +77,7 @@ python build_spec.py
 - **两套协议、两种校验**：KaUDC004A = CRC16-CCITT（big-endian）；AFDT1024 = 字节求和。改协议时别用错校验算法。
 - **AFDT1024 V2.1 一律以末尾指令号(ADDR)分派**：`SerialWorker._process_frame` 按 `parse_response` 返回的 `addr` 分流——`0x5C→parse_status_response`(TX)、`0x9C→parse_rx_status_response`(RX)、其余已知 ADDR→配置 echo。状态 `status_info` 会带上 `device_id` 上抛，供多子阵按 ID 路由到表格行。
 - **（历史）RX 校验和 bug 已在 V2.1 移除**：旧 RX 设备算校验和漏 mcu_ver 字节，曾用 `has_rx_status_bug` 兼容；V2.1 明确全字段求和，已删除该兼容逻辑，模拟器也改为正常校验和。
-- **多子阵（TX/RX 一条总线挂多个子阵，ID 区分）**：`DevicePanel` 基类提供子阵管理——`_parse_id_list()` 解析 ID 列表；`_get_target_device_id()` 按「目标下拉(全部=广播 ID=0 / 指定 ID)」+「仅本子阵(+128)」算配置 device_id；状态用按 ID 一行的表格，`_update_status_row()` 按回复帧 `device_id & 0x7F` 路由；`_on_query_status()` 逐个 ID 查询。`_gen_subarray_ids(cols, n)` 按协议拼接编号（左列 `0x01~0x0N`、右列 `0x11~0x1N`）一键生成 ID。三种 ID 模式：`0`=广播不返回 / 实际ID=对应返回 / `+128`=仅对应返回。
+- **多子阵（TX/RX 一条总线挂多个子阵，ID 区分）**：`DevicePanel` 基类提供子阵管理——`_parse_id_list()` 解析 ID 列表；`_get_target_device_id()` 按「目标下拉(全部=广播 ID=0 / 指定 ID)」+「仅本子阵(+128)」算配置 device_id；状态用按 ID 一行的表格，`_update_status_row()` 按回复帧 `device_id & 0x7F` 路由；`_on_query_status()` 对每个 ID 发查询1(状态)+查询2(波束参数)，`_update_status_row` 按列名增量合并到同一行。`_gen_subarray_ids(cols, n)` 按协议拼接编号（左列 `0x01~0x0N`、右列 `0x11~0x1N`）一键生成 ID。三种 ID 模式：`0`=广播不返回 / 实际ID=对应返回 / `+128`=仅对应返回。
 - **波束 12bit 打包**：帧内 `FREQ | BeamV[11:0] | BeamH[11:0]`（BeamV 高位、BeamH 低位）。`build_*_beam_frame` 参数顺序已统一 `(device_id, freq, beam_h, beam_v)`。
 - **温度解码当前返回原始字节**：`protocol.py` 的 `decode_temperature` 和 `main_qt6.py` 里 0x0C 分支的"`0x80`=0°C 偏移"逻辑都被**注释掉了**（最近提交 `feat: 更新协议文档和温度解码逻辑` 有意为之）。改温度显示前先确认这是否仍是预期。
 - **状态字段换算**：AFDT1024 状态里 `sys_vcc = 原值 × 0.1` V，`sys_temp = 原值 − 80` ℃。
@@ -84,7 +85,7 @@ python build_spec.py
 
 ## 文档地图
 
-- `DOC/AFDT1024_TX_Protocol.md`、`DOC/AFDR1024_RX_Protocol.md`：TX/RX 协议规范（**已更新到 V2.1**），对应 PDF 原件 `…控制接口协议_V2.1_20260317.pdf`；`DOC/KauDC004A_protocol.md` 为变频器协议。改协议代码时的权威依据。
-- `KauDC004A_TestTool/PROTOCOL_V2.1_MIGRATION_PLAN.md`、`MULTI_SUBARRAY_PLAN.md`：本轮 V2.1 适配与多子阵改造的计划/验收。
+- `DOC/AFDT1024_TX_Protocol.md`、`DOC/AFDR1024_RX_Protocol.md`：TX/RX 协议规范（**已更新到 V2.2**），对应 PDF 原件 `…控制接口协议_V2.2_20260612.pdf`。改协议代码时的权威依据。
+- `KauDC004A_TestTool/PROTOCOL_V2.1_MIGRATION_PLAN.md`、`PROTOCOL_V2.2_PLAN.md`、`MULTI_SUBARRAY_PLAN.md`：各轮协议适配与多子阵改造的计划/验收。
 - `KauDC004A_TestTool/DEV_LOG.md`、`plan.md`、`PROTOCOL_FIX_PLAN.md`、`UI_FREEZE_ANALYSIS.md`：开发日志与历次修复方案。**注意其中关于 QtSerialPort/Tkinter 的描述已过时**，仅作历史参考。
 - `DOC/上位调试软件需求.txt`、`DOC/修改记录.txt`：需求与版本变更记录。
