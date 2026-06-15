@@ -21,12 +21,14 @@ ADDR_TX_ENABLE = 0x51
 ADDR_TX_POLARIZATION = 0x53
 ADDR_PA_ENABLE = 0x56
 ADDR_STATUS_QUERY = 0x5C
+ADDR_TX_BEAM_QUERY = 0x5F
 
 # RX设备命令地址
 ADDR_RX_BEAM = 0x90
 ADDR_RX_ENABLE = 0x91
 ADDR_RX_POLARIZATION = 0x93
 ADDR_RX_STATUS_QUERY = 0x9C
+ADDR_RX_BEAM_QUERY = 0x9F
 
 
 def calculate_checksum(data):
@@ -69,12 +71,58 @@ def parse_frame(data):
     }
 
 
+def _default_state():
+    return {"pol": 0, "en_row": 0, "freq_code": 0, "beam_v": 0, "beam_h": 0}
+
+
+def record_config(states, sub_id, addr, payload):
+    """根据配置帧更新某子阵状态（用于查询指令2回读）。payload 为去掉末尾 ADDR 的数据区。"""
+    st = states.setdefault(sub_id, _default_state())
+    if addr in (ADDR_TX_BEAM, ADDR_RX_BEAM) and len(payload) >= 4:
+        # 波束: [FREQ, BeamV[11:4], BeamV[3:0]|BeamH[11:8], BeamH[7:0]]
+        st["freq_code"] = payload[0]
+        st["beam_v"] = (payload[1] << 4) | ((payload[2] >> 4) & 0x0F)
+        st["beam_h"] = ((payload[2] & 0x0F) << 8) | payload[3]
+    elif addr in (ADDR_TX_ENABLE, ADDR_RX_ENABLE) and len(payload) >= 2:
+        # 使能: [EN_H, EN_L, 0xFF, 0xFF]
+        st["en_row"] = (payload[0] << 8) | payload[1]
+    elif addr in (ADDR_TX_POLARIZATION, ADDR_RX_POLARIZATION) and len(payload) >= 4:
+        # 极化: [0,0,0,POL]
+        st["pol"] = payload[3] & 0x01
+
+
+def build_beam_query_response(device_id_byte, sub_id, states, ret_addr):
+    """构造查询指令2（波束参数）返回帧（V2.2，数据长度17）。"""
+    st = states.get(sub_id, _default_state())
+    pol = st["pol"] & 0x01
+    en = st["en_row"] & 0xFFFF
+    freq = st["freq_code"] & 0xFF
+    bv = st["beam_v"] & 0xFFF
+    bh = st["beam_h"] & 0xFFF
+    payload16 = bytes(
+        [
+            0, 0, 0, 0, 0, 0, 0,  # D127~D72 Rev
+            pol,                   # D71~D64, bit0=POL
+            (en >> 8) & 0xFF, en & 0xFF,  # EN_ROW
+            0xFF, 0xFF,            # 0xFFFF 固定
+            freq,                  # FREQ
+            (bv >> 4) & 0xFF,      # BeamV[11:4]
+            ((bv & 0x0F) << 4) | ((bh >> 8) & 0x0F),  # BeamV[3:0]|BeamH[11:8]
+            bh & 0xFF,             # BeamH[7:0]
+        ]
+    )
+    data = payload16 + bytes([ret_addr])  # 17 字节
+    frame = FRAME_HEADER + bytes([device_id_byte]) + bytes([len(data)]) + data
+    return frame + bytes([calculate_checksum(frame)])
+
+
 class TXSimulator:
     """TX设备模拟器"""
 
     def __init__(self, port, ids=None):
         self.port = port
         self.ids = list(ids) if ids else [1]  # 本总线模拟的子阵 ID 集合
+        self.states = {}  # 每个子阵的波束/极化/使能配置（用于查询指令2回读）
         self.running = False
         self.ser = None
 
@@ -151,8 +199,11 @@ class TXSimulator:
         target = parsed["device_id"]
         masked = target & 0x7F  # 去掉 +128 位
 
-        # ID=0 广播：所有子阵响应但不返回
+        # ID=0 广播：所有子阵记录配置但不返回
         if target == 0:
+            if addr not in (ADDR_STATUS_QUERY, ADDR_TX_BEAM_QUERY):
+                for sid in self.ids:
+                    record_config(self.states, sid, addr, parsed["payload"])
             print(f"[{timestamp()}] [TX] 广播(ID=0)，不返回")
             return
         # 仅响应本总线上存在的子阵 ID
@@ -162,7 +213,11 @@ class TXSimulator:
         if addr == ADDR_STATUS_QUERY:
             response = self.build_status_response(masked)
             print(f"[{timestamp()}] [TX] ID={masked} 状态回复: {response.hex().upper()}")
+        elif addr == ADDR_TX_BEAM_QUERY:
+            response = build_beam_query_response(masked, masked, self.states, ADDR_TX_BEAM_QUERY)
+            print(f"[{timestamp()}] [TX] ID={masked} 波束参数回复: {response.hex().upper()}")
         else:
+            record_config(self.states, masked, addr, parsed["payload"])  # 记录配置
             response = frame  # 配置 echo 原样返回
             print(f"[{timestamp()}] [TX] ID={masked} Echo: {response.hex().upper()}")
 
@@ -186,6 +241,7 @@ class RXSimulator:
     def __init__(self, port, ids=None):
         self.port = port
         self.ids = list(ids) if ids else [1]  # 本总线模拟的子阵 ID 集合
+        self.states = {}  # 每个子阵的波束/极化/使能配置（用于查询指令2回读）
         self.running = False
         self.ser = None
 
@@ -263,6 +319,9 @@ class RXSimulator:
         masked = target & 0x7F
 
         if target == 0:
+            if addr not in (ADDR_RX_STATUS_QUERY, ADDR_RX_BEAM_QUERY):
+                for sid in self.ids:
+                    record_config(self.states, sid, addr, parsed["payload"])
             print(f"[{timestamp()}] [RX] 广播(ID=0)，不返回")
             return
         if masked not in self.ids:
@@ -271,7 +330,11 @@ class RXSimulator:
         if addr == ADDR_RX_STATUS_QUERY:
             response = self.build_rx_status_response(masked)
             print(f"[{timestamp()}] [RX] ID={masked} 状态回复: {response.hex().upper()}")
+        elif addr == ADDR_RX_BEAM_QUERY:
+            response = build_beam_query_response(masked, masked, self.states, ADDR_RX_BEAM_QUERY)
+            print(f"[{timestamp()}] [RX] ID={masked} 波束参数回复: {response.hex().upper()}")
         else:
+            record_config(self.states, masked, addr, parsed["payload"])
             response = frame
             print(f"[{timestamp()}] [RX] ID={masked} Echo: {response.hex().upper()}")
 

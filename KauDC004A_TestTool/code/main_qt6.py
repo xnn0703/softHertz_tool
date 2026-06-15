@@ -60,6 +60,10 @@ from afdt1024_protocol import (
     STATUS_RETURN_ADDRS,
     ADDR_STATUS_QUERY,
     ADDR_RX_STATUS_QUERY,
+    BEAM_QUERY_RETURN_ADDRS,
+    parse_beam_query_response,
+    build_tx_beam_query_frame,
+    build_rx_beam_query_frame,
     FRAME_HEADER,
 )
 
@@ -222,6 +226,24 @@ class SerialWorker(QThread):
                 else:
                     self.log_signal.emit(f"<<< 收到: {frame_hex}")
                     self.log_signal.emit(f"✗ 状态解析失败: {status_msg}")
+            elif addr in BEAM_QUERY_RETURN_ADDRS:
+                # 查询指令2：波束参数（V2.2）
+                beam_info, beam_msg = parse_beam_query_response(
+                    parsed["payload"], is_tx=(self.device_type == "TX")
+                )
+                if beam_msg == "OK" and beam_info:
+                    beam_info["device_id"] = parsed.get("device_id")
+                    sub_id = (parsed.get("device_id") or 0) & 0x7F
+                    self.log_signal.emit(f"<<< 收到: {frame_hex}")
+                    self.log_signal.emit(
+                        f"[ID=0x{sub_id:02X}] 极化:{'RHCP' if beam_info['pol'] else 'LHCP'} "
+                        f"使能:{'ON' if beam_info['en_row'] else 'OFF'} 频率:{beam_info['freq_mhz']}MHz "
+                        f"BeamV:{beam_info['beam_v']} BeamH:{beam_info['beam_h']}"
+                    )
+                    self.status_signal.emit(beam_info)
+                else:
+                    self.log_signal.emit(f"<<< 收到: {frame_hex}")
+                    self.log_signal.emit(f"✗ 波束参数解析失败: {beam_msg}")
             elif addr in ADDR_CMD_NAMES:
                 cmd_name = ADDR_CMD_NAMES.get(addr, f"0x{addr:02X}")
                 self.log_signal.emit(f"<<< 收到: {frame_hex}")
@@ -536,6 +558,7 @@ class DevicePanel(QFrame):
     def _create_status_group(self, columns):
         """状态表格组。columns 首列为 ID。含"查询全部状态"按钮。"""
         self._status_columns = columns
+        self._col_index = {name: i for i, name in enumerate(columns)}
         group = QGroupBox("状态")
         v = QVBoxLayout()
 
@@ -544,8 +567,9 @@ class DevicePanel(QFrame):
         self.status_table.verticalHeader().setVisible(False)
         self.status_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.status_table.setMinimumHeight(140)  # 默认可见约 4~5 行，更多则滚动
+        # 列较多：按内容自适应宽度，配合外层横向滚动查看
         for c in range(len(columns)):
-            self.status_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
+            self.status_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeToContents)
         v.addWidget(self.status_table)
 
         self.query_btn = QPushButton("查询全部状态")
@@ -568,25 +592,42 @@ class DevicePanel(QFrame):
             for c in range(1, len(self._status_columns)):
                 self.status_table.setItem(row, c, QTableWidgetItem("N/A"))
 
-    def _update_status_row(self, status_info):
-        """按 device_id 路由到对应行更新电压/温度(/PA)"""
-        dev = status_info.get("device_id")
+    def _update_status_row(self, info):
+        """按 device_id 路由到对应行，按字段增量更新。
+
+        查询1(电压/温度/PA)与查询2(极化/使能/频率/BeamV/BeamH/θ/φ)各更新自己的列，互不覆盖。
+        """
+        dev = info.get("device_id")
         if dev is None:
             return
         sub_id = dev & 0x7F  # 去掉可能的 +128
         row = getattr(self, "_status_rows", {}).get(sub_id)
         if row is None:
             return
-        self.status_table.setItem(
-            row, 1, QTableWidgetItem(f"{status_info.get('sys_vcc', 0):.1f}")
-        )
-        self.status_table.setItem(
-            row, 2, QTableWidgetItem(str(status_info.get("sys_temp", 0)))
-        )
-        if len(self._status_columns) >= 4 and "pa_en" in status_info:
-            self.status_table.setItem(
-                row, 3, QTableWidgetItem("ON" if status_info["pa_en"] else "OFF")
-            )
+
+        def setcol(name, value):
+            idx = self._col_index.get(name)
+            if idx is not None:
+                self.status_table.setItem(row, idx, QTableWidgetItem(str(value)))
+
+        # 查询1
+        if "sys_vcc" in info:
+            setcol("电压(V)", f"{info['sys_vcc']:.1f}")
+        if "sys_temp" in info:
+            setcol("温度(°C)", info["sys_temp"])
+        if "pa_en" in info:
+            setcol("PA", "ON" if info["pa_en"] else "OFF")
+        # 查询2（波束参数）
+        if "pol" in info:
+            setcol("极化", "RHCP" if info["pol"] else "LHCP")
+        if "en_row" in info:
+            setcol("使能", "ON" if info["en_row"] else "OFF")
+        if "freq_mhz" in info:
+            setcol("频率(MHz)", info["freq_mhz"])
+        if "beam_v" in info:
+            setcol("BeamV", info["beam_v"])
+        if "beam_h" in info:
+            setcol("BeamH", info["beam_h"])
 
     def _on_query_status(self):
         """逐个 ID 发状态查询"""
@@ -601,13 +642,18 @@ class DevicePanel(QFrame):
         for i in ids:
             dev = (i + 128) & 0xFF if plus else i
             try:
-                self.worker.send_frame(self._build_status_query_frame(dev))
+                self.worker.send_frame(self._build_status_query_frame(dev))  # 查询1: 电压/温度
+                QThread.msleep(50)
+                self.worker.send_frame(self._build_beam_query_frame(dev))  # 查询2: 波束参数
                 QThread.msleep(50)
             except Exception as e:
                 self.log_text.appendPlainText(f"查询ID=0x{i:02X}失败: {e}")
         self.log_text.appendPlainText(f">>> 已查询 {len(ids)} 个子阵状态")
 
     def _build_status_query_frame(self, device_id):
+        raise NotImplementedError
+
+    def _build_beam_query_frame(self, device_id):
         raise NotImplementedError
 
     def _connect(self):
@@ -958,12 +1004,12 @@ class TXPanel(DevicePanel):
         pol_group.setLayout(pol_layout)
         layout.addWidget(pol_group)
 
-        # 状态表格（每个子阵 ID 一行）+ 查询全部
-        _cols = (
-            ["ID", "电压(V)", "温度(°C)", "PA"]
-            if self.device_type == "TX"
-            else ["ID", "电压(V)", "温度(°C)"]
-        )
+        # 状态表格（每个子阵 ID 一行）+ 查询全部（查询1电压温度 + 查询2波束参数合并）
+        _beam_cols = ["极化", "使能", "频率(MHz)", "BeamV", "BeamH"]
+        if self.device_type == "TX":
+            _cols = ["ID", "电压(V)", "温度(°C)", "PA"] + _beam_cols
+        else:
+            _cols = ["ID", "电压(V)", "温度(°C)"] + _beam_cols
         layout.addWidget(self._create_status_group(_cols))
 
         # 日志窗口
@@ -1009,7 +1055,9 @@ class TXPanel(DevicePanel):
                 QMessageBox.warning(self, "警告", "频段号超出范围")
                 return
 
-            beam_h, beam_v = calculate_beam_values(theta, phi, freq, is_tx=True)
+            # 用量化到 50MHz 步进的实际工作频率算波束，与设备下发/回读保持一致
+            actual_freq = 27500 + 50 * freq_num
+            beam_h, beam_v = calculate_beam_values(theta, phi, actual_freq, is_tx=True)
             frame = build_tx_beam_frame(device_id, freq_num, beam_h, beam_v)
             self.worker.send_frame(frame)
             self.log_text.appendPlainText(
@@ -1059,6 +1107,9 @@ class TXPanel(DevicePanel):
 
     def _build_status_query_frame(self, device_id):
         return build_status_query_frame(device_id)
+
+    def _build_beam_query_frame(self, device_id):
+        return build_tx_beam_query_frame(device_id)
 
     def _on_config_success(self, cmd_name):
         pass
@@ -1132,12 +1183,12 @@ class RXPanel(DevicePanel):
         pol_group.setLayout(pol_layout)
         layout.addWidget(pol_group)
 
-        # 状态表格（每个子阵 ID 一行）+ 查询全部
-        _cols = (
-            ["ID", "电压(V)", "温度(°C)", "PA"]
-            if self.device_type == "TX"
-            else ["ID", "电压(V)", "温度(°C)"]
-        )
+        # 状态表格（每个子阵 ID 一行）+ 查询全部（查询1电压温度 + 查询2波束参数合并）
+        _beam_cols = ["极化", "使能", "频率(MHz)", "BeamV", "BeamH"]
+        if self.device_type == "TX":
+            _cols = ["ID", "电压(V)", "温度(°C)", "PA"] + _beam_cols
+        else:
+            _cols = ["ID", "电压(V)", "温度(°C)"] + _beam_cols
         layout.addWidget(self._create_status_group(_cols))
 
         # 日志窗口
@@ -1183,7 +1234,9 @@ class RXPanel(DevicePanel):
                 QMessageBox.warning(self, "警告", "频段号超出范围")
                 return
 
-            beam_h, beam_v = calculate_beam_values(theta, phi, freq, is_tx=False)
+            # 用量化到 50MHz 步进的实际工作频率算波束，与设备下发/回读保持一致
+            actual_freq = 17700 + 50 * freq_num
+            beam_h, beam_v = calculate_beam_values(theta, phi, actual_freq, is_tx=False)
             frame = build_rx_beam_frame(device_id, freq_num, beam_h, beam_v)
             self.log_text.appendPlainText(
                 f">>> 发送波束设置: BeamH={beam_h}, BeamV={beam_v}"
@@ -1223,6 +1276,9 @@ class RXPanel(DevicePanel):
 
     def _build_status_query_frame(self, device_id):
         return build_rx_status_query_frame(device_id)
+
+    def _build_beam_query_frame(self, device_id):
+        return build_rx_beam_query_frame(device_id)
 
     def _on_config_success(self, cmd_name):
         pass

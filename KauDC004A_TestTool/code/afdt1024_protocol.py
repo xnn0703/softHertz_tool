@@ -51,6 +51,14 @@ STATUS_RETURN_ADDRS = {
     ADDR_RX_STATUS_QUERY: "RX",  # 0x9C
 }
 
+# 查询指令2（波束参数）地址与返回指令号 -> 设备类型（V2.2）
+ADDR_TX_BEAM_QUERY = 0x5F
+ADDR_RX_BEAM_QUERY = 0x9F
+BEAM_QUERY_RETURN_ADDRS = {
+    ADDR_TX_BEAM_QUERY: "TX",
+    ADDR_RX_BEAM_QUERY: "RX",
+}
+
 # 配置命令地址映射（用于回显检测时显示命令名称）
 ADDR_CMD_NAMES = {
     ADDR_TX_BEAM: "TX波束",
@@ -322,6 +330,74 @@ def build_rx_phase_cal_frame(device_id, phase_offset):
 def build_rx_status_query_frame(device_id):
     """构建 RX 状态查询帧"""
     return build_frame(device_id, ADDR_RX_STATUS_QUERY, build_status_query_command())
+
+
+def build_tx_beam_query_frame(device_id):
+    """构建 TX 查询指令2（波束参数）帧（V2.2）"""
+    return build_frame(device_id, ADDR_TX_BEAM_QUERY, b"")
+
+
+def build_rx_beam_query_frame(device_id):
+    """构建 RX 查询指令2（波束参数）帧（V2.2）"""
+    return build_frame(device_id, ADDR_RX_BEAM_QUERY, b"")
+
+
+def _code_to_deg(code):
+    """12bit 补码波控值 -> 角度（度）。0~2047→0~+180，2048~4095→-180~0。"""
+    code &= 0xFFF
+    if code < 2048:
+        return code * 180.0 / 2048.0
+    return (code - 4096) * 180.0 / 2048.0
+
+
+def beam_code_to_angle(beam_v, beam_h, freq, is_tx=True):
+    """由 BeamV/BeamH 码值与频率反算离轴角 θ 与方位角 φ（度）。
+
+    BeamH→Ux, BeamV→Uy；Ux=180×(f/f0)×sinθ×cosφ, Uy=180×(f/f0)×sinθ×sinφ。
+    → θ=asin(hypot(Ux,Uy)/k), φ=atan2(Uy,Ux), k=180×f/f0。
+    注: 单组 BeamV/BeamH 反解二维角度，θ 取 [0,90]。
+    """
+    f0 = TX_F0 if is_tx else RX_F0
+    ux = _code_to_deg(beam_h)
+    uy = _code_to_deg(beam_v)
+    k = 180.0 * (freq / f0) if f0 else 0.0
+    if k == 0:
+        return 0.0, 0.0
+    s = max(0.0, min(1.0, math.hypot(ux, uy) / k))
+    theta = math.degrees(math.asin(s))
+    phi = math.degrees(math.atan2(uy, ux))
+    return theta, phi
+
+
+def parse_beam_query_response(payload, is_tx=True):
+    """解析查询指令2（波束参数）返回（V2.2）。
+
+    payload 为去掉末尾指令号(0x5F/0x9F)后的 16 字节(D127~D0, big-endian)：
+        Rev(D127~D65) | POL(D64) | EN_ROW(D63~D48) | 0xFFFF(D47~D32)
+        | FREQ(D31~D24) | BeamV(D23~D12) | BeamH(D11~D0)
+    """
+    if len(payload) < 16:
+        return None, "波束参数响应长度不足"
+    try:
+        pol = payload[7] & 0x01
+        en_row = (payload[8] << 8) | payload[9]
+        freq_code = payload[12]
+        beam_v = (payload[13] << 4) | ((payload[14] >> 4) & 0x0F)
+        beam_h = ((payload[14] & 0x0F) << 8) | payload[15]
+        freq_mhz = (27500 if is_tx else 17700) + 50 * freq_code
+        theta, phi = beam_code_to_angle(beam_v, beam_h, freq_mhz, is_tx)
+        return {
+            "pol": pol,
+            "en_row": en_row,
+            "freq_code": freq_code,
+            "freq_mhz": freq_mhz,
+            "beam_v": beam_v,
+            "beam_h": beam_h,
+            "theta": theta,
+            "phi": phi,
+        }, "OK"
+    except Exception as e:
+        return None, f"解析波束参数响应错误: {str(e)}"
 
 
 # ============================================================
