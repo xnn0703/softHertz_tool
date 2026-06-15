@@ -7,6 +7,7 @@ KauDC004A_TestTool - PySide6 + pyserial 版本
 """
 
 import sys
+import os
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -33,7 +34,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
 )
 from PySide6.QtCore import QThread, Signal, Slot, QTimer, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QIcon
 
 import time
 import datetime
@@ -72,6 +73,12 @@ from protocol import (
     build_frame as kaudc_build_frame,
     parse_response as kaudc_parse_response,
 )
+
+
+def _resource_path(rel):
+    """定位资源：onefile 打包时在 sys._MEIPASS，开发时在脚本目录"""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, rel)
 
 
 # ============================================================
@@ -1293,6 +1300,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SoftHertz AFDTR Tool")
+        _icon_path = _resource_path("soft_hertz_logo_deepspace_blue_512.png")
+        if os.path.exists(_icon_path):
+            self.setWindowIcon(QIcon(_icon_path))
         self.setGeometry(100, 100, 1200, 700)
 
         # 横向滚动区包裹三面板：窗口变窄/变矮时出现滚动条，而非压缩内容
