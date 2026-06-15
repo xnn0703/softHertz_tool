@@ -24,6 +24,12 @@ from afdt1024_protocol import (
     ADDR_RX_STATUS_QUERY,
     ADDR_TX_BEAM,
     ADDR_RX_BEAM,
+    ADDR_TX_BEAM_QUERY,
+    ADDR_RX_BEAM_QUERY,
+    build_tx_beam_query_frame,
+    build_rx_beam_query_frame,
+    parse_beam_query_response,
+    beam_code_to_angle,
     FRAME_HEADER,
 )
 
@@ -583,6 +589,93 @@ class TestMultiSubarray:
         parsed, _ = afdt_parse_response(frame)
         # UI 路由用 device_id & 0x7F
         assert (parsed["device_id"] & 0x7F) == 5
+
+
+class TestV22BeamQuery:
+    """V2.2 查询指令2（波束参数）"""
+
+    def test_beam_query_frame_build(self):
+        f = build_tx_beam_query_frame(1)
+        assert f[:3] == FRAME_HEADER
+        assert f[3] == 1
+        assert f[4] == 1  # 数据长度=1
+        assert f[5] == ADDR_TX_BEAM_QUERY  # 0x5F
+        assert f[-1] == calculate_checksum(f[:-1])
+        assert build_rx_beam_query_frame(2)[5] == ADDR_RX_BEAM_QUERY  # 0x9F
+
+    def test_beam_query_parse_roundtrip(self):
+        # 用模拟器构造含已知配置的查询2返回帧，再解析回读
+        from device_simulator import (
+            build_beam_query_response,
+            record_config,
+            ADDR_TX_BEAM,
+            ADDR_TX_ENABLE,
+            ADDR_TX_POLARIZATION,
+        )
+
+        states = {}
+        bv, bh = 712, 712
+        beam_payload = bytes(
+            [40, (bv >> 4) & 0xFF, ((bv & 0x0F) << 4) | ((bh >> 8) & 0x0F), bh & 0xFF]
+        )
+        record_config(states, 2, ADDR_TX_BEAM, beam_payload)
+        record_config(states, 2, ADDR_TX_ENABLE, bytes([0xFF, 0xFF, 0xFF, 0xFF]))
+        record_config(states, 2, ADDR_TX_POLARIZATION, bytes([0, 0, 0, 1]))  # RHCP
+
+        frame = build_beam_query_response(2, 2, states, ADDR_TX_BEAM_QUERY)
+        parsed, msg = afdt_parse_response(frame)
+        assert msg == "OK"
+        assert parsed["addr"] == ADDR_TX_BEAM_QUERY
+        assert parsed["device_id"] == 2
+
+        info, imsg = parse_beam_query_response(parsed["payload"], is_tx=True)
+        assert imsg == "OK"
+        assert info["pol"] == 1
+        assert info["en_row"] == 0xFFFF
+        assert info["beam_v"] == 712
+        assert info["beam_h"] == 712
+        assert info["freq_mhz"] == 27500 + 50 * 40  # 29500
+
+    def test_beam_code_to_angle(self):
+        # 协议示例: 29500, BeamV=712, BeamH=712 -> θ≈30, φ≈45
+        theta, phi = beam_code_to_angle(712, 712, 29500, is_tx=True)
+        assert abs(theta - 30) < 0.5
+        assert abs(phi - 45) < 0.5
+        # BeamH=3384 (负) -> φ≈135
+        theta2, phi2 = beam_code_to_angle(712, 3384, 29500, is_tx=True)
+        assert abs(theta2 - 30) < 0.5
+        assert abs(phi2 - 135) < 0.5
+        # 全 0 -> θ=0
+        t0, _ = beam_code_to_angle(0, 0, 29500, is_tx=True)
+        assert abs(t0) < 0.5
+
+    def test_beam_roundtrip_with_quantized_freq(self):
+        # UI频率20270不在50MHz网格上 -> 量化到20250；用量化频率算波束才能往返自洽
+        freq_num = int((20270 - 17700) / 50)
+        actual = 17700 + 50 * freq_num
+        assert actual == 20250
+        bh, bv = calculate_beam_values(50.2, 10.0, actual, is_tx=False)
+        th, ph = beam_code_to_angle(bv, bh, actual, is_tx=False)
+        assert abs(th - 50.2) < 0.05  # 自洽，仅剩亚码量化误差
+        assert abs(ph - 10.0) < 0.1
+
+    def test_sim_config_readback(self):
+        # 配置回读闭环：LHCP + 使能关
+        from device_simulator import (
+            build_beam_query_response,
+            record_config,
+            ADDR_RX_POLARIZATION,
+            ADDR_RX_ENABLE,
+        )
+
+        states = {}
+        record_config(states, 5, ADDR_RX_POLARIZATION, bytes([0, 0, 0, 0]))  # LHCP
+        record_config(states, 5, ADDR_RX_ENABLE, bytes([0x00, 0x00, 0xFF, 0xFF]))  # off
+        frame = build_beam_query_response(5, 5, states, ADDR_RX_BEAM_QUERY)
+        parsed, _ = afdt_parse_response(frame)
+        info, _ = parse_beam_query_response(parsed["payload"], is_tx=False)
+        assert info["pol"] == 0
+        assert info["en_row"] == 0x0000
 
 
 if __name__ == "__main__":
