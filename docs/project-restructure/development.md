@@ -1,12 +1,12 @@
 # SoftHertz Tool 工程收敛实施记录
 
-状态：本地实现与验证完成；Windows CI、远端仓库改名和真实硬件验收待完成
+状态：工程、仓库与本地目录迁移完成；Windows 原生和真实硬件验收待完成
 
 ## 1. 实施基线
 
 - 基线分支：`master`
 - 基线提交：`ef82881`
-- 迁移前正式包与兼容回归：`183 passed`
+- 迁移前正式包与兼容回归合计：`183 passed`（包含两套入口中的重复断言）
 - 正式实现来源：`src/soft_hertz_tool` 的设备纵向切片架构
 
 迁移不改写 Git 历史。旧 PyQt5 实现、旧兼容入口和历史生成物仍可从基线提交及其祖先提交恢复。
@@ -66,6 +66,15 @@
   - `docs/development/acceptance-boundaries.md`
 - 过程性旧文档已删除；有效约束已合并到当前文档。
 
+### 2.6 Git 与仓库迁移
+
+- 目录迁移与产品重命名提交为 `542268f`，过时代理规划文档清理提交为 `f80390c`。
+- 迁移提交以普通快进方式进入 Gitee 默认开发主线 `master`，未改写历史、强推或删除远端历史分支。
+- Gitee 仓库已改名为 `softHertz_tool`，开发 remote 为 `https://gitee.com/soft-hertz/softHertz_tool.git`。
+- GitHub 发布仓库已改名为 `softHertz_tool`，remote 为 `https://github.com/xnn0703/softHertz_tool.git`。
+- 本次开发提交只推送 Gitee；GitHub 现有发布代码线未同步、未创建 Release。
+- 本地仓库目录已改名为 `softHertz_tool`，并在新路径重新创建 editable 虚拟环境。
+
 ## 3. 测试吸收
 
 - 旧串口改进测试的 50 个用例名称均已进入正式测试树。
@@ -94,6 +103,7 @@
 | AFDT1024/AFDR1024 模拟器 `--help` | 通过，无提前导入告警 |
 | AFD01_QS 模拟器 `--help` | 通过 |
 | `python -m pip check` | 通过 |
+| GitHub Actions YAML 解析 | 通过 |
 | `git diff --check` | 通过 |
 | macOS PyInstaller clean build | 通过 |
 | macOS 打包产物 `--smoke` | 通过 |
@@ -103,8 +113,8 @@ macOS 本地产物仅用于验证入口、资源收集和生命周期，不是 W
 ## 5. 待完成门槛
 
 - 更新后的 GitHub Actions 尚未在 Windows runner 实际执行。
+- Python 3.9 最低版本目前只完成依赖解析和语法兼容检查，尚未完成原生 Windows 运行。
 - `SoftHertz_Tool.exe` 尚未在干净 Windows 10 1809+ 或 Windows 11 客户环境验证。
-- Gitee、GitHub 远端仓库名称和本地仓库目录需要在代码提交后完成改名与 URL 复核。
 - KaUDC004A、AFDT1024、AFDR1024、AFD01_QS 真实设备验收仍保持未完成。
 - AFD01_QS V1.6 受控协议原件仍待补入。
 - 历史日志没有自动迁移或删除；需要保留运维可见性。
