@@ -1,0 +1,53 @@
+name: Build Windows EXE
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -e "KauDC004A_TestTool[dev]"
+
+      - name: Run regression tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: >-
+          python -m pytest
+          KauDC004A_TestTool/tests
+          KauDC004A_TestTool/code/test_serial_improved.py
+          KauDC004A_TestTool/code/test_qs_features.py
+          -q
+
+      - name: Build EXE (PyInstaller)
+        working-directory: KauDC004A_TestTool/code
+        run: python build_spec.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SoftHertz_AFDTR_Tool-windows
+          path: KauDC004A_TestTool/code/dist/SoftHertz_AFDTR_Tool.exe
+
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: KauDC004A_TestTool/code/dist/SoftHertz_AFDTR_Tool.exe

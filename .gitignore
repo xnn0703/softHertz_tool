@@ -1,8 +1,32 @@
-*.pyc
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+
+# ===== 虚拟环境 =====
+.venv/
+venv/
+env/
+
+# ===== PyInstaller 打包产物 =====
+build/
+dist/
 *.spec
-*.html
-*.txt
-*.toc
-*.pyz
+*.manifest
+version_info.txt
+
+# ===== 可执行 / 压缩产物 =====
+*.exe
 *.zip
 
+# ===== 运行时日志 =====
+*.log
+log.txt
+*serial_log.txt
+
+# ===== 操作系统 / 编辑器 =====
+.DS_Store
+Thumbs.db
+*.swp
