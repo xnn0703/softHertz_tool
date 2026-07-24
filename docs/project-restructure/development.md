@@ -73,7 +73,8 @@
 - Gitee 仓库已改名为 `softHertz_tool`，开发 remote 为 `https://gitee.com/soft-hertz/softHertz_tool.git`。
 - GitHub 发布仓库已改名为 `softHertz_tool`，remote 为 `https://github.com/xnn0703/softHertz_tool.git`。
 - 本次开发提交只推送 Gitee；GitHub 现有发布代码线未同步、未创建 Release。
-- 本地仓库目录已改名为 `softHertz_tool`，并在新路径重新创建 editable 虚拟环境。
+- 本地编号目录已改名为 `2-softHertz_tool` 并直接作为仓库根，中间 `softHertz_tool`
+  目录已去除；editable 虚拟环境在最终路径重新创建。
 
 ## 3. 测试吸收
 

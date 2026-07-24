@@ -12,10 +12,16 @@ from soft_hertz_tool.devices.afd01_qs.stream import FrameStreamParser
 
 
 class QSDeviceSimulator:
+    """通过串口模拟周期 A0 上报和 0x0B/A1 阵列交互的状态内核。"""
     PERIOD_S = 0.01
     MIN_INTERVAL_S = 0.005
 
     def __init__(self, serial_port):
+        """创建使用给定串口对象的 QS 模拟器。
+
+        Args:
+            serial_port: 提供 ``read``、``write`` 和 ``in_waiting`` 的串口对象。
+        """
         self.serial = serial_port
         self.parser = FrameStreamParser()
         self.tx_size = 8
@@ -26,6 +32,11 @@ class QSDeviceSimulator:
         self.running = False
 
     def _a0_frame(self) -> bytes:
+        """构建一帧包含固定示例遥测与运行时间的 A0 上报。
+
+        Returns:
+            完整 QS A0 帧；运行时间字段单位为秒。
+        """
         uptime = int(time.monotonic() - self.started)
         payload = struct.pack(
             ">BhhHffffBBhhhhhBBBI",
@@ -52,12 +63,25 @@ class QSDeviceSimulator:
         return build_frame(0xA0, payload)
 
     def _a1_frame(self, result: int = 0) -> bytes:
+        """构建当前 KA256 阵列状态的 A1 回读帧。
+
+        Args:
+            result: A1 结果位图，零表示成功。
+
+        Returns:
+            完整 QS A1 帧。
+        """
         return build_frame(
             0xA1,
             bytes([result, self.tx_size, self.rx_size, self.power_flags, self.apply_flags]),
         )
 
     def process_input(self, data: bytes) -> None:
+        """解析输入并对有效 0x0B 查询或设置返回 A1。
+
+        Args:
+            data: 串口输入字节，可含分包、粘包或非阵列命令。
+        """
         for event in self.parser.feed(data):
             if event.kind != "frame" or not event.parsed:
                 continue
@@ -87,6 +111,11 @@ class QSDeviceSimulator:
             self.serial.write(self._a1_frame(result))
 
     def run(self, duration: float = 0.0) -> None:
+        """运行串口循环并以目标 100 Hz 发送 A0。
+
+        Args:
+            duration: 运行时长，单位为秒；零表示持续运行至 ``stop``。
+        """
         self.running = True
         deadline = time.monotonic()
         end = deadline + duration if duration > 0 else None
@@ -108,10 +137,16 @@ class QSDeviceSimulator:
             time.sleep(min(0.001, max(0.0, deadline - time.monotonic())))
 
     def stop(self) -> None:
+        """请求 ``run`` 循环在下一次条件检查时退出。"""
         self.running = False
 
 
 def main() -> None:
+    """解析命令行串口参数并启动 QS 模拟器。
+
+    Raises:
+        serial.SerialException: 串口无法打开时由 pyserial 抛出。
+    """
     import serial
 
     parser = argparse.ArgumentParser(description="AFD01_QS V1.6 serial simulator")

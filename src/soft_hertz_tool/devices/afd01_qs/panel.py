@@ -34,6 +34,11 @@ class Afd01QsPanel(QWidget):
     frame_signal = Signal(object)
 
     def __init__(self, parent=None):
+        """创建 QS 控制、遥测和阵列状态页面。
+
+        Args:
+            parent: Qt 父对象。
+        """
         super().__init__(parent)
         self.worker: Optional[Afd01QsDriver] = None
         self._latest_telemetry: Dict[str, object] = {}
@@ -67,6 +72,17 @@ class Afd01QsPanel(QWidget):
         maximum: float,
         decimals: int = 2,
     ) -> QDoubleSpinBox:
+        """创建具有统一范围、精度和初始值的浮点输入框。
+
+        Args:
+            value: 初始值。
+            minimum: 最小允许值。
+            maximum: 最大允许值。
+            decimals: 显示小数位数。
+
+        Returns:
+            配置完成的 Qt 浮点输入框。
+        """
         widget = QDoubleSpinBox()
         widget.setRange(minimum, maximum)
         widget.setDecimals(decimals)
@@ -74,6 +90,7 @@ class Afd01QsPanel(QWidget):
         return widget
 
     def _build_ui(self) -> None:
+        """组装串口、QS 指令、A0 遥测和 KA256 阵列控件。"""
         layout = QVBoxLayout(self)
 
         serial_group = QGroupBox("AFD01_QS 串口")
@@ -215,18 +232,36 @@ class Afd01QsPanel(QWidget):
         col: int,
         callback: Callable[[], None],
     ) -> None:
+        """在网格布局中创建并连接一个按钮。
+
+        Args:
+            layout: 目标网格布局。
+            text: 按钮显示文本。
+            row: 目标行号。
+            col: 目标列号。
+            callback: 点击后执行的槽函数。
+        """
         button = QPushButton(text)
         button.clicked.connect(callback)
         layout.addWidget(button, row, col)
 
     @Slot(str, int)
     def _connect_device(self, port: str, baudrate: int) -> None:
+        """创建新 Driver 并将其信号绑定到当前连接代际。
+
+        Args:
+            port: 要连接的串口。
+            baudrate: 串口波特率。
+
+        状态：页面已关闭或旧 Driver 无法停止时不创建新会话。
+        """
         if self._shutdown:
             self.serial_connection.set_disconnected("页面已停止")
             return
         if self.worker is not None and not self.disconnect_device():
             return
 
+        # 旧线程可能在停止后才投递信号；代际令牌确保其不能覆盖新连接的 UI。
         self._connection_generation += 1
         generation = self._connection_generation
         self.serial_connection.set_connecting()
@@ -275,7 +310,10 @@ class Afd01QsPanel(QWidget):
 
     @Slot()
     def _toggle_connection(self) -> None:
-        """保留旧 QSPanel 的程序化连接入口。"""
+        """保留旧 QSPanel 的程序化连接/断开入口。
+
+        状态：已有 Driver 时请求断开；无端口时显示告警；否则按当前下拉框创建连接。
+        """
         if self.worker is not None:
             self.disconnect_device()
             return
@@ -288,6 +326,12 @@ class Afd01QsPanel(QWidget):
 
     @Slot(bool, str)
     def _on_opened(self, opened: bool, message: str) -> None:
+        """根据当前 Driver 的开串口结果更新连接与阵列控件。
+
+        Args:
+            opened: 串口是否成功打开。
+            message: 面向操作员的诊断信息。
+        """
         if opened:
             self.serial_connection.set_connected(message)
             self._last_a0_time = 0.0
@@ -299,6 +343,15 @@ class Afd01QsPanel(QWidget):
             self.serial_connection.set_disconnected(message)
 
     def _is_current_worker(self, worker: Afd01QsDriver, generation: int) -> bool:
+        """判断异步信号是否仍属于当前串口连接代际。
+
+        Args:
+            worker: 发出信号的 Driver。
+            generation: 建立该连接时捕获的代际号。
+
+        Returns:
+            Driver 身份和代际号均匹配时为 ``True``。
+        """
         return worker is self.worker and generation == self._connection_generation
 
     def _on_driver_opened(
@@ -308,6 +361,14 @@ class Afd01QsPanel(QWidget):
         opened: bool,
         message: str,
     ) -> None:
+        """处理当前 Driver 的串口打开结果，并延后查询阵列状态。
+
+        Args:
+            worker: 发出信号的 Driver。
+            generation: 连接代际号。
+            opened: 串口是否成功打开。
+            message: 串口诊断信息。
+        """
         if not self._is_current_worker(worker, generation):
             return
         self._on_opened(opened, message)
@@ -326,6 +387,13 @@ class Afd01QsPanel(QWidget):
         generation: int,
         message: str,
     ) -> None:
+        """将当前连接的 Driver 日志显示在连接状态栏。
+
+        Args:
+            worker: 发出日志的 Driver。
+            generation: 连接代际号。
+            message: 日志文本。
+        """
         if self._is_current_worker(worker, generation):
             self.connection_label.setText(message)
 
@@ -335,6 +403,13 @@ class Afd01QsPanel(QWidget):
         generation: int,
         telemetry: Dict[str, object],
     ) -> None:
+        """缓存当前连接的 A0 解码结果，等待 UI 定时器批量刷新。
+
+        Args:
+            worker: 发出遥测的 Driver。
+            generation: 连接代际号。
+            telemetry: 已解码的 A0 字段。
+        """
         if self._is_current_worker(worker, generation):
             self._on_telemetry(telemetry)
 
@@ -344,6 +419,13 @@ class Afd01QsPanel(QWidget):
         generation: int,
         rate: float,
     ) -> None:
+        """显示当前连接的 A0 滑动上报频率。
+
+        Args:
+            worker: 发出频率的 Driver。
+            generation: 连接代际号。
+            rate: 滑动窗口频率，单位 Hz。
+        """
         if self._is_current_worker(worker, generation):
             self._on_report_rate(rate)
 
@@ -353,14 +435,32 @@ class Afd01QsPanel(QWidget):
         generation: int,
         status: Dict[str, int],
     ) -> None:
+        """处理当前连接返回的 A1 阵列状态。
+
+        Args:
+            worker: 发出状态的 Driver。
+            generation: 连接代际号。
+            status: 已解码的 A1 阵列状态。
+        """
         if self._is_current_worker(worker, generation):
             self._on_array_status(status)
 
     def _query_array_if_current(self, worker: Afd01QsDriver, generation: int) -> None:
+        """仅在连接仍有效且串口已运行时自动查询阵列。
+
+        Args:
+            worker: 计划查询时捕获的 Driver。
+            generation: 计划查询时捕获的连接代际号。
+        """
         if self._is_current_worker(worker, generation) and worker.running:
             self._begin_array_request(lambda driver: driver.query_array())
 
     def _on_driver_finished(self, worker: Afd01QsDriver) -> None:
+        """在 Driver 线程结束后清理当前引用和 Qt 对象。
+
+        Args:
+            worker: 已结束的 Driver。
+        """
         if worker is self.worker:
             self.worker = None
             self._reset_connection_display("串口已关闭")
@@ -368,6 +468,11 @@ class Afd01QsPanel(QWidget):
 
     @Slot()
     def disconnect_device(self) -> bool:
+        """停止当前 Driver，并在确认退出后重置页面连接状态。
+
+        Returns:
+            串口线程已停止或原本不存在时为 ``True``；停止超时时为 ``False``。
+        """
         self._connection_generation += 1
         self._array_timeout.stop()
         self._array_pending = False
@@ -383,12 +488,22 @@ class Afd01QsPanel(QWidget):
         return True
 
     def _reset_connection_display(self, message: str = "未连接") -> None:
+        """把连接和 A0 频率控件恢复为未连接状态。
+
+        Args:
+            message: 要显示的连接状态文本。
+        """
         self.serial_connection.set_disconnected(message)
         self._last_a0_time = 0.0
         self.report_rate_label.setText("A0 上报频率: -- Hz")
         self.report_rate_label.setStyleSheet("")
 
     def _safe_send(self, action: Callable[[Afd01QsDriver], bool]) -> None:
+        """在 Driver 已运行时执行语义发送，并向操作员显示参数错误。
+
+        Args:
+            action: 接收当前 Driver 并返回入队结果的发送动作。
+        """
         if not self.worker or not self.worker.running:
             QMessageBox.warning(self, "警告", "请先打开串口")
             return
@@ -399,6 +514,7 @@ class Afd01QsPanel(QWidget):
 
     @Slot()
     def _send_01(self) -> None:
+        """读取页面输入并发送 0x01 SNR 上报命令。"""
         self._safe_send(
             lambda driver: driver.report_snr(
                 self.snr.value(),
@@ -410,6 +526,7 @@ class Afd01QsPanel(QWidget):
 
     @Slot()
     def _send_02(self) -> None:
+        """读取页面输入并发送 0x02 波束配置命令。"""
         self._safe_send(
             lambda driver: driver.configure_beam(
                 self.sat_lon.value(),
@@ -421,26 +538,36 @@ class Afd01QsPanel(QWidget):
 
     @Slot()
     def _send_03(self) -> None:
+        """发送 0x03 发射开关命令。"""
         self._safe_send(lambda driver: driver.set_transmit_enabled(self.tx_enable.currentIndex()))
 
     @Slot()
     def _send_04(self) -> None:
+        """发送 0x04 航向扫描角命令。"""
         self._safe_send(lambda driver: driver.set_heading_scan_angle(self.scan_angle.value()))
 
     @Slot()
     def _send_05(self) -> None:
+        """发送 0x05 跟踪模式命令。"""
         self._safe_send(lambda driver: driver.set_track_mode(self.track_mode.currentIndex()))
 
     @Slot()
     def _send_06(self) -> None:
+        """发送 0x06 航向对准角命令。"""
         self._safe_send(lambda driver: driver.set_heading_align_angle(self.align_angle.value()))
 
     @Slot()
     def _send_08(self) -> None:
+        """发送 0x08 双行 TLE 配置命令。"""
         self._safe_send(lambda driver: driver.configure_tle(self.tle1.text(), self.tle2.text()))
 
     @Slot(int)
     def _send_beam(self, command: int) -> None:
+        """以页面 theta/phi 输入发送指定波束角命令。
+
+        Args:
+            command: 0x07、0x09 或 0x0A 波束角命令。
+        """
         self._safe_send(
             lambda driver: driver.set_beam_angle(
                 command,
@@ -451,17 +578,31 @@ class Afd01QsPanel(QWidget):
 
     @Slot(dict)
     def _on_telemetry(self, telemetry: Dict[str, object]) -> None:
+        """缓存最新 A0 遥测并记录最后接收时间。
+
+        Args:
+            telemetry: 已解码的 A0 字段。
+        """
         self._latest_telemetry = telemetry
         self._last_a0_time = time.monotonic()
 
     @Slot(float)
     def _on_report_rate(self, rate: float) -> None:
+        """显示 A0 上报频率并按正常范围设置颜色。
+
+        Args:
+            rate: 滑动窗口频率，单位 Hz。
+        """
         self.report_rate_label.setText(f"A0 上报频率: {rate:.1f} Hz")
         color = "#198754" if 95.0 <= rate <= 105.0 else "#d97706"
         self.report_rate_label.setStyleSheet(f"color:{color}; font-weight:bold;")
 
     @Slot()
     def _refresh_telemetry(self) -> None:
+        """以 10 Hz 刷新 A0 表格，并在超过一秒无 A0 时显示超时。
+
+        A0 可约 100 Hz 到达；缓存后定时刷新避免每帧重绘阻塞 Qt 主线程。
+        """
         if self._last_a0_time and time.monotonic() - self._last_a0_time > 1.0:
             self.report_rate_label.setText("A0 上报频率: 0.0 Hz（超时）")
             self.report_rate_label.setStyleSheet("color:#c62828; font-weight:bold;")
@@ -476,6 +617,7 @@ class Afd01QsPanel(QWidget):
 
     @Slot()
     def _preview_array(self) -> None:
+        """根据待选规模与已确认状态预览 KA256 TX/RX 网格。"""
         tx_size = self.tx_size_cb.currentData()
         rx_size = self.rx_size_cb.currentData()
         confirmed = self._confirmed_array
@@ -495,6 +637,11 @@ class Afd01QsPanel(QWidget):
             self.array_status_label.setText("TX 已预览；发射关闭时将缓存，待发射开启后生效")
 
     def _set_array_busy(self, busy: bool) -> None:
+        """按请求中状态和固件兼容性启用或禁用阵列按钮。
+
+        Args:
+            busy: 是否已有阵列请求在等待 A1 回读。
+        """
         enabled = not busy and self._array_supported
         self.array_apply_btn.setEnabled(enabled)
         self.array_read_btn.setEnabled(enabled)
@@ -503,6 +650,14 @@ class Afd01QsPanel(QWidget):
         self,
         action: Union[Callable[[Afd01QsDriver], bool], bytes],
     ) -> None:
+        """发送唯一的阵列请求并启动 A1 回读超时计时。
+
+        Args:
+            action: 正式页面使用接收 Driver 的语义操作；字节帧仅兼容旧私有测试。
+
+        状态：请求未结束时拒绝新请求；发送成功后等待 A1 最多 3 秒。
+        """
+        # 固件不支持并发阵列命令；单请求和超时降级保护其他 QS 指令继续可用。
         if self._array_pending:
             return
         if not self.worker or not self.worker.running:
@@ -530,10 +685,12 @@ class Afd01QsPanel(QWidget):
 
     @Slot()
     def _query_array(self) -> None:
+        """发送 KA256 阵列读取请求。"""
         self._begin_array_request(lambda driver: driver.query_array())
 
     @Slot()
     def _apply_array(self) -> None:
+        """把当前 TX/RX 选择标为待确认并发送阵列设置请求。"""
         self.tx_grid.set_state(
             self.tx_size_cb.currentData(),
             bool(self._confirmed_array["power_flags"] & 1),
@@ -553,6 +710,11 @@ class Afd01QsPanel(QWidget):
 
     @Slot(dict)
     def _on_array_status(self, status: Dict[str, int]) -> None:
+        """应用 A1 回读，结束请求并显示阵列、电源和确认状态。
+
+        Args:
+            status: 已解码 A1 字段，包含结果、TX/RX 规模及状态位。
+        """
         self._array_timeout.stop()
         self._array_pending = False
         self._array_supported = True
@@ -588,6 +750,7 @@ class Afd01QsPanel(QWidget):
 
     @Slot()
     def _on_array_timeout(self) -> None:
+        """将阵列功能降级为不可用，但保留其余 QS 控制能力。"""
         self._array_pending = False
         self._array_supported = False
         self._set_array_busy(False)
@@ -596,7 +759,10 @@ class Afd01QsPanel(QWidget):
         )
 
     def activate(self) -> None:
-        """工作区进入前台时恢复端口扫描和 10 Hz UI 刷新。"""
+        """工作区进入前台时恢复端口扫描和 10 Hz UI 刷新。
+
+        状态：已关闭页面保持停止，不会重新启动定时器。
+        """
 
         if self._shutdown:
             return
@@ -607,7 +773,11 @@ class Afd01QsPanel(QWidget):
             self._telemetry_timer.start(100)
 
     def deactivate(self) -> bool:
-        """断开串口并暂停隐藏页面的定时器。"""
+        """断开串口并暂停隐藏页面的定时器。
+
+        Returns:
+            Driver 已确认停止时为 ``True``；停止超时时保持页面活动并返回 ``False``。
+        """
 
         stopped = self.disconnect_device()
         if stopped:
@@ -619,7 +789,11 @@ class Afd01QsPanel(QWidget):
 
     @Slot()
     def shutdown(self) -> bool:
-        """停止设备页面所有活动任务，允许重复调用。"""
+        """停止设备页面所有活动任务，允许重复调用。
+
+        Returns:
+            所有后台资源已停止或页面此前已关闭时为 ``True``；Driver 停止失败时为 ``False``。
+        """
         if self._shutdown:
             return True
         if not self.disconnect_device():
@@ -633,6 +807,11 @@ class Afd01QsPanel(QWidget):
         return True
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        """在窗口关闭前确认后台串口线程已停止。
+
+        Args:
+            event: Qt 关闭事件；停止失败时会被忽略以允许用户重试。
+        """
         if not self.shutdown():
             event.ignore()
             return

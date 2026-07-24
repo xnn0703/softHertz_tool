@@ -112,6 +112,7 @@ BEAM_CODE_MASK = 0x0FFF
 
 
 def command_name(addr: int) -> str:
+    """返回指令地址的人类可读名称，未知地址按十六进制显示。"""
     return ADDR_NAMES.get(addr, f"0x{addr:02X}")
 
 
@@ -221,6 +222,7 @@ def make_beam_setting(
 
 
 def _pack_beam_payload(freq: int, beam_h: int, beam_v: int) -> bytes:
+    """按协议位布局打包频率码和两个 12 bit 波束码为 4 字节。"""
     freq &= 0xFF
     beam_v &= BEAM_CODE_MASK
     beam_h &= BEAM_CODE_MASK
@@ -246,36 +248,44 @@ def unpack_beam_payload(payload: bytes) -> tuple[int, int, int]:
 
 
 def build_tx_beam_command(freq: int, beam_h: int, beam_v: int) -> bytes:
+    """构造 AFDT1024 波束设置的数据区。"""
     return _pack_beam_payload(freq, beam_h, beam_v)
 
 
 def build_rx_beam_command(freq: int, beam_h: int, beam_v: int) -> bytes:
+    """构造 AFDR1024 波束设置的数据区。"""
     return _pack_beam_payload(freq, beam_h, beam_v)
 
 
 def build_enable_command(enable: bool) -> bytes:
+    """构造阵列开关数据区，返回 4 字节受控协议载荷。"""
     value = ARRAY_ENABLE if enable else ARRAY_DISABLE
     return bytes([(value >> 8) & 0xFF, value & 0xFF, 0xFF, 0xFF])
 
 
 def build_polarization_command(polarization: int) -> bytes:
+    """构造极化数据区；低位 ``0/1`` 分别表示 LHCP/RHCP。"""
     return b"\x00\x00\x00" + bytes([int(polarization) & 0x01])
 
 
 def build_pa_enable_command(enable: bool) -> bytes:
+    """构造仅 AFDT1024 使用的推动 PA 开关数据区。"""
     return b"\x00\x00\x00" + bytes([PA_ENABLE if enable else PA_DISABLE])
 
 
 def build_phase_cal_command(phase_offset: int) -> bytes:
+    """构造相位校准数据区，并将协议值夹紧到 0~63。"""
     phase_offset = max(0, min(63, int(phase_offset)))
     return b"\x00\x00\x00" + bytes([phase_offset & 0x3F])
 
 
 def build_id_update_command(new_id: int) -> bytes:
+    """构造子阵 ID 更新数据区；调用方负责校验目标 ID 范围。"""
     return b"\x00" + bytes([int(new_id) & 0xFF])
 
 
 def build_status_query_command() -> bytes:
+    """返回查询 1 的空数据区。"""
     return b""
 
 
@@ -289,58 +299,72 @@ build_rx_status_query_command = build_status_query_command
 
 
 def build_tx_beam_frame(device_id: int, freq: int, beam_h: int, beam_v: int) -> bytes:
+    """构造发送端 AFDT1024 波束设置完整帧。"""
     return build_frame(device_id, ADDR_TX_BEAM, build_tx_beam_command(freq, beam_h, beam_v))
 
 
 def build_tx_enable_frame(device_id: int, enable: bool) -> bytes:
+    """构造发送端 AFDT1024 阵列使能完整帧。"""
     return build_frame(device_id, ADDR_TX_ENABLE, build_enable_command(enable))
 
 
 def build_tx_polarization_frame(device_id: int, polarization: int) -> bytes:
+    """构造发送端 AFDT1024 极化设置完整帧。"""
     return build_frame(device_id, ADDR_TX_POLARIZATION, build_polarization_command(polarization))
 
 
 def build_pa_enable_frame(device_id: int, enable: bool) -> bytes:
+    """构造发送端 AFDT1024 推动 PA 使能完整帧。"""
     return build_frame(device_id, ADDR_PA_ENABLE, build_pa_enable_command(enable))
 
 
 def build_phase_cal_frame(device_id: int, phase_offset: int) -> bytes:
+    """构造发送端 AFDT1024 相位校准完整帧。"""
     return build_frame(device_id, ADDR_PHASE_CAL, build_phase_cal_command(phase_offset))
 
 
 def build_id_update_frame(device_id: int, new_id: int) -> bytes:
+    """构造 ID 更新完整帧；广播更新时 ``device_id`` 应为 ``0``。"""
     return build_frame(device_id, ADDR_ID_UPDATE, build_id_update_command(new_id))
 
 
 def build_status_query_frame(device_id: int) -> bytes:
+    """构造发送端 AFDT1024 查询 1 完整帧。"""
     return build_frame(device_id, ADDR_STATUS_QUERY)
 
 
 def build_rx_beam_frame(device_id: int, freq: int, beam_h: int, beam_v: int) -> bytes:
+    """构造接收端 AFDR1024 波束设置完整帧。"""
     return build_frame(device_id, ADDR_RX_BEAM, build_rx_beam_command(freq, beam_h, beam_v))
 
 
 def build_rx_enable_frame(device_id: int, enable: bool) -> bytes:
+    """构造接收端 AFDR1024 阵列使能完整帧。"""
     return build_frame(device_id, ADDR_RX_ENABLE, build_enable_command(enable))
 
 
 def build_rx_polarization_frame(device_id: int, polarization: int) -> bytes:
+    """构造接收端 AFDR1024 极化设置完整帧。"""
     return build_frame(device_id, ADDR_RX_POLARIZATION, build_polarization_command(polarization))
 
 
 def build_rx_phase_cal_frame(device_id: int, phase_offset: int) -> bytes:
+    """构造接收端 AFDR1024 相位校准完整帧。"""
     return build_frame(device_id, ADDR_RX_PHASE_CAL, build_phase_cal_command(phase_offset))
 
 
 def build_rx_status_query_frame(device_id: int) -> bytes:
+    """构造接收端 AFDR1024 查询 1 完整帧。"""
     return build_frame(device_id, ADDR_RX_STATUS_QUERY)
 
 
 def build_tx_beam_query_frame(device_id: int) -> bytes:
+    """构造发送端 AFDT1024 查询 2 完整帧。"""
     return build_frame(device_id, ADDR_TX_BEAM_QUERY)
 
 
 def build_rx_beam_query_frame(device_id: int) -> bytes:
+    """构造接收端 AFDR1024 查询 2 完整帧。"""
     return build_frame(device_id, ADDR_RX_BEAM_QUERY)
 
 
@@ -349,6 +373,7 @@ def build_beam_frame(
     setting: BeamSetting,
     variant: Union[DeviceVariant, str],
 ) -> bytes:
+    """根据 AFDT1024/AFDR1024 变体选择波束帧地址并构造完整帧。"""
     variant = DeviceVariant.coerce(variant)
     builder = build_tx_beam_frame if variant.is_tx else build_rx_beam_frame
     return builder(device_id, setting.frequency_code, setting.beam_h, setting.beam_v)
@@ -359,6 +384,7 @@ def build_enable_frame(
     enable: bool,
     variant: Union[DeviceVariant, str],
 ) -> bytes:
+    """根据 AFDT1024/AFDR1024 变体构造阵列使能完整帧。"""
     variant = DeviceVariant.coerce(variant)
     builder = build_tx_enable_frame if variant.is_tx else build_rx_enable_frame
     return builder(device_id, enable)
@@ -369,6 +395,7 @@ def build_polarization_frame(
     polarization: int,
     variant: Union[DeviceVariant, str],
 ) -> bytes:
+    """根据 AFDT1024/AFDR1024 变体构造极化设置完整帧。"""
     variant = DeviceVariant.coerce(variant)
     builder = build_tx_polarization_frame if variant.is_tx else build_rx_polarization_frame
     return builder(device_id, polarization)
@@ -387,6 +414,7 @@ def build_query_frames(
 
 
 def _code_to_deg(code: int) -> float:
+    """将 12 bit 补码波控值还原为等效相位角，单位为度。"""
     code &= BEAM_CODE_MASK
     if code < 2048:
         return code * 180.0 / 2048.0
@@ -399,6 +427,10 @@ def beam_code_to_angle(
     freq: float,
     is_tx: bool = True,
 ) -> tuple[float, float]:
+    """由波束码反算 ``(theta, phi)``，角度单位为度。
+
+    ``is_tx`` 决定采用 AFDT1024 或 AFDR1024 的标称频率。
+    """
     f0 = TX_F0 if is_tx else RX_F0
     ux = _code_to_deg(beam_h)
     uy = _code_to_deg(beam_v)
@@ -413,6 +445,15 @@ def parse_beam_query_response(
     payload: bytes,
     is_tx: bool = True,
 ) -> Tuple[Optional[dict[str, Any]], str]:
+    """解析查询 2 的 16 字节有效载荷。
+
+    Args:
+        payload: 不含指令地址的响应数据区。
+        is_tx: ``True`` 按 AFDT1024 频率基准换算，否则按 AFDR1024。
+
+    Returns:
+        成功时返回字段字典和 ``"OK"``；长度不足时返回 ``(None, 原因)``。
+    """
     if len(payload) < 16:
         return None, "波束参数响应长度不足"
     pol = payload[7] & 0x01
@@ -435,6 +476,7 @@ def parse_beam_query_response(
 
 
 def parse_status_response(payload: bytes) -> Tuple[Optional[dict[str, Any]], str]:
+    """解析 AFDT1024 查询 1 响应，电压单位 V、温度单位摄氏度。"""
     if len(payload) < 6:
         return None, "TX状态响应长度不足"
     return {
@@ -450,6 +492,7 @@ def parse_status_response(payload: bytes) -> Tuple[Optional[dict[str, Any]], str
 
 
 def parse_rx_status_response(payload: bytes) -> Tuple[Optional[dict[str, Any]], str]:
+    """解析 AFDR1024 查询 1 响应，电压单位 V、温度单位摄氏度。"""
     if len(payload) < 5:
         return None, "RX状态响应长度不足"
     return {
@@ -472,6 +515,7 @@ def build_tx_status_response_frame(
     att_tc: int = 0x01,
     mcu_ver: int = 0x02,
 ) -> bytes:
+    """构造供模拟器和测试使用的 AFDT1024 查询 1 响应完整帧。"""
     payload = bytes([rev, state, sys_vcc_raw, sys_temp_raw, att_tc, mcu_ver])
     return build_frame(device_id, ADDR_STATUS_QUERY, payload)
 
@@ -485,6 +529,7 @@ def build_rx_status_response_frame(
     att_tc: int = 0x04,
     mcu_ver: int = 0x02,
 ) -> bytes:
+    """构造供模拟器和测试使用的 AFDR1024 查询 1 响应完整帧。"""
     payload = bytes([rev, sys_vcc_raw, sys_temp_raw, att_tc, mcu_ver])
     return build_frame(device_id, ADDR_RX_STATUS_QUERY, payload)
 
@@ -494,6 +539,10 @@ def build_beam_query_response_frame(
     variant: Union[DeviceVariant, str],
     state: Mapping[str, int],
 ) -> bytes:
+    """按状态映射构造 AFDT1024/AFDR1024 查询 2 响应完整帧。
+
+    ``device_id`` 保持调用方提供的字节值，以便模拟 ``+0x80`` 单阵寻址响应。
+    """
     variant = DeviceVariant.coerce(variant)
     pol = int(state.get("pol", 0)) & 0x01
     en_row = int(state.get("en_row", 0)) & 0xFFFF

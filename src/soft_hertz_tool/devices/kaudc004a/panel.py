@@ -54,6 +54,12 @@ class KaUDCPanel(QFrame):
         parent=None,
         driver_factory: Callable[[str, int], KaUDCDriver] = KaUDCDriver,
     ) -> None:
+        """创建 KaUDC004A 交互面板。
+
+        Args:
+            parent: 可选 Qt 父对象。
+            driver_factory: 创建串口 Driver 的工厂，便于测试注入替身。
+        """
         super().__init__(parent)
         self._driver_factory = driver_factory
         self._driver: Optional[KaUDCDriver] = None
@@ -63,6 +69,11 @@ class KaUDCPanel(QFrame):
 
     @property
     def driver(self) -> Optional[KaUDCDriver]:
+        """返回当前连接的 Driver。
+
+        Returns:
+            已创建但尚未停止的 Driver；未连接时为 ``None``。
+        """
         return self._driver
 
     @property
@@ -71,6 +82,7 @@ class KaUDCPanel(QFrame):
         return self._driver
 
     def _setup_ui(self) -> None:
+        """创建固定的串口、状态、本振、命令和日志控件布局。"""
         layout = QVBoxLayout(self)
 
         title = QLabel("KaUDC004A")
@@ -93,6 +105,11 @@ class KaUDCPanel(QFrame):
         layout.addStretch()
 
     def _create_status_group(self) -> QGroupBox:
+        """创建显示版本、温度、本振、衰减和锁定状态的表格。
+
+        Returns:
+            已初始化状态行映射的 Qt 分组控件。
+        """
         group = QGroupBox("设备状态")
         group_layout = QVBoxLayout(group)
         labels = (
@@ -119,6 +136,11 @@ class KaUDCPanel(QFrame):
         return group
 
     def _create_lo_group(self) -> QGroupBox:
+        """创建收发本振预设选择与发送控件。
+
+        Returns:
+            使用 MHz 预设值的本振设置分组控件。
+        """
         group = QGroupBox("本振设置")
         layout = QGridLayout(group)
 
@@ -140,6 +162,11 @@ class KaUDCPanel(QFrame):
         return group
 
     def _create_command_group(self) -> QGroupBox:
+        """创建查询、复位和收发衰减命令分派控件。
+
+        Returns:
+            包含命令选择和衰减整数输入框的分组控件。
+        """
         group = QGroupBox("命令")
         layout = QGridLayout(group)
 
@@ -171,6 +198,11 @@ class KaUDCPanel(QFrame):
         return group
 
     def _create_log_group(self) -> QGroupBox:
+        """创建仅显示当前页面 Driver 日志的控件。
+
+        Returns:
+            含只读日志框和清除按钮的分组控件。
+        """
         group = QGroupBox("日志")
         layout = QVBoxLayout(group)
         self.log_text = QPlainTextEdit()
@@ -184,6 +216,16 @@ class KaUDCPanel(QFrame):
 
     @Slot(str, int)
     def _connect_device(self, port_name: str, baudrate: int) -> None:
+        """按用户选择创建并启动新的串口 Driver。
+
+        Args:
+            port_name: 要打开的串口名。
+            baudrate: 目标串口波特率。
+
+        状态:
+            新连接前必须成功停止旧 Driver；各信号回调捕获该 Driver 实例，避免旧连接完成后
+            覆盖当前页面状态。
+        """
         if self._shutdown:
             self.connection.set_disconnected("页面已停止")
             return
@@ -206,6 +248,13 @@ class KaUDCPanel(QFrame):
         driver.start()
 
     def _on_driver_opened(self, driver: KaUDCDriver, success: bool, message: str) -> None:
+        """仅接受当前 Driver 的打开结果并更新连接状态。
+
+        Args:
+            driver: 发出信号的 Driver 实例。
+            success: 串口是否成功打开。
+            message: 面向操作员的打开结果说明。
+        """
         if driver is not self._driver:
             return
         if success:
@@ -214,21 +263,43 @@ class KaUDCPanel(QFrame):
             self.connection.set_disconnected(message)
 
     def _on_driver_finished(self, driver: KaUDCDriver) -> None:
+        """处理 Driver 线程结束，且不清除新连接的状态。
+
+        Args:
+            driver: 已结束的 Driver 实例。
+        """
         if driver is self._driver:
             self._driver = None
             self.connection.set_disconnected("串口已关闭")
         driver.deleteLater()
 
     def _append_driver_log(self, driver: KaUDCDriver, message: str) -> None:
+        """将当前连接的 Driver 日志追加到面板。
+
+        Args:
+            driver: 日志来源 Driver。
+            message: 要显示的诊断文本。
+        """
         if driver is self._driver:
             self.log_text.appendPlainText(message)
 
     def _on_driver_status(self, driver: KaUDCDriver, status: dict) -> None:
+        """仅将当前 Driver 的结构化响应更新到 UI。
+
+        Args:
+            driver: 状态来源 Driver。
+            status: 已由协议层解码的命令响应字典。
+        """
         if driver is self._driver:
             self._on_status(status)
 
     @Slot()
     def _disconnect_device(self) -> bool:
+        """响应连接控件的断开请求。
+
+        Returns:
+            Driver 已安全停止并更新为未连接时为 ``True``。
+        """
         stopped = self._stop_driver()
         if stopped:
             self.connection.set_disconnected()
@@ -240,6 +311,11 @@ class KaUDCPanel(QFrame):
         return self._disconnect_device()
 
     def _stop_driver(self) -> bool:
+        """停止并释放当前 Driver，停止超时时保留对象供操作员重试。
+
+        Returns:
+            无 Driver 或 Driver 已确认停止时为 ``True``；停止超时时为 ``False``。
+        """
         driver = self._driver
         if driver is not None:
             self.connection.set_stopping()
@@ -251,6 +327,11 @@ class KaUDCPanel(QFrame):
         return True
 
     def _active_driver(self) -> Optional[KaUDCDriver]:
+        """取得可发送命令的当前 Driver。
+
+        Returns:
+            已运行的 Driver；未连接或已停止时显示提示并返回 ``None``。
+        """
         if self._driver is None or not self._driver.running:
             QMessageBox.warning(self, "警告", "请先打开串口")
             return None
@@ -258,6 +339,11 @@ class KaUDCPanel(QFrame):
 
     @Slot()
     def _set_tx_lo(self) -> None:
+        """发送当前选中的发射本振设置。
+
+        状态:
+            下拉预设以 MHz 传给 Driver；只有帧成功入队时才追加操作日志。
+        """
         driver = self._active_driver()
         if driver is None:
             return
@@ -267,6 +353,11 @@ class KaUDCPanel(QFrame):
 
     @Slot()
     def _set_rx_lo(self) -> None:
+        """发送当前选中的接收本振设置。
+
+        状态:
+            下拉预设以 MHz 传给 Driver；只有帧成功入队时才追加操作日志。
+        """
         driver = self._active_driver()
         if driver is None:
             return
@@ -276,6 +367,12 @@ class KaUDCPanel(QFrame):
 
     @Slot()
     def _send_selected_command(self) -> None:
+        """按当前命令选择分派查询、复位或收发衰减设置。
+
+        状态:
+            查询与复位复用 Driver 语义方法；衰减输入必须是 ``0..300`` 的协议整数，
+            对应 ``0.0..30.0 dB``，协议层拒绝时向操作员显示异常。
+        """
         driver = self._active_driver()
         if driver is None:
             return
@@ -314,6 +411,11 @@ class KaUDCPanel(QFrame):
 
     @Slot()
     def _query_device(self) -> None:
+        """按短间隔依次发送版本、温度、本振和衰减查询。
+
+        状态:
+            使用 ``QTimer.singleShot`` 避免在 UI 线程阻塞；每次回调再次确认 Driver 仍是当前连接。
+        """
         driver = self._active_driver()
         if driver is None:
             return
@@ -326,11 +428,26 @@ class KaUDCPanel(QFrame):
         self.log_text.appendPlainText("设备查询已发送")
 
     def _invoke_driver(self, driver: KaUDCDriver, method_name: str) -> None:
+        """在延迟查询回调中安全调用仍有效的 Driver 方法。
+
+        Args:
+            driver: 定时器创建时捕获的 Driver。
+            method_name: 无参数查询方法名。
+
+        状态:
+            若用户已断开或连接了新设备，旧回调不发送命令。
+        """
         if driver is self._driver and driver.running:
             getattr(driver, method_name)()
 
     @Slot(dict)
     def _on_status(self, status: dict) -> None:
+        """将协议层状态字典映射到状态表并转发给工作区。
+
+        Args:
+            status: 包含命令及其已解码字段的响应字典。本振单位为 MHz，衰减显示为 dB，
+                温度当前显示原始字节。
+        """
         if "version" in status:
             self._set_status("版本", f"0x{status['version']:02X}")
         if "temperature_raw" in status:
@@ -354,6 +471,12 @@ class KaUDCPanel(QFrame):
         self.status_signal.emit(status)
 
     def _set_status(self, label: str, value: object) -> None:
+        """更新指定状态行的文本。
+
+        Args:
+            label: 初始化时建立的状态行名称。
+            value: 要显示的值。
+        """
         row = self._status_rows[label]
         self.status_table.item(row, 1).setText(str(value))
 
@@ -391,6 +514,11 @@ class KaUDCPanel(QFrame):
         return True
 
     def closeEvent(self, event) -> None:
+        """关闭窗口前停止 Driver；停止失败时阻止 Qt 关闭。
+
+        Args:
+            event: Qt 关闭事件。
+        """
         if not self.shutdown():
             event.ignore()
             return

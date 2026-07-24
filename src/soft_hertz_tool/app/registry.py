@@ -13,4 +13,10 @@ WORKSPACE_SPECS = (
 
 
 def workspace_keys() -> tuple[str, ...]:
+    """返回按 UI 展示顺序排列的稳定 Workspace key。
+
+    Returns:
+        registry 中所有工作区 key 组成的不可变元组。
+    """
+
     return tuple(spec.key for spec in WORKSPACE_SPECS)

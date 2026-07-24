@@ -45,6 +45,7 @@ class AFDTR1024Panel(QFrame):
         parent=None,
         driver_factory: Callable[..., AFDTR1024Driver] = AFDTR1024Driver,
     ):
+        """创建指定 AFDT1024/AFDR1024 变体的页面及其延迟创建的 Driver。"""
         super().__init__(parent)
         self.variant = DeviceVariant.coerce(variant)
         self._driver_factory = driver_factory
@@ -58,6 +59,7 @@ class AFDTR1024Panel(QFrame):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
+        """组装串口、子阵、配置、状态和日志区域。"""
         layout = QVBoxLayout(self)
 
         self.title_label = QLabel(self.variant.model_name)
@@ -84,6 +86,7 @@ class AFDTR1024Panel(QFrame):
         layout.addStretch()
 
     def _create_subarray_group(self) -> QGroupBox:
+        """创建子阵 ID 生成、目标选择和单阵寻址控件。"""
         group = QGroupBox("子阵设置")
         layout = QVBoxLayout(group)
 
@@ -123,6 +126,7 @@ class AFDTR1024Panel(QFrame):
         return group
 
     def _create_beam_group(self) -> QGroupBox:
+        """创建以 MHz 和度为单位的波束设置控件。"""
         group = QGroupBox(f"{self.variant.value}波束设置")
         layout = QGridLayout(group)
         layout.addWidget(QLabel("频率(MHz):"), 0, 0)
@@ -141,6 +145,7 @@ class AFDTR1024Panel(QFrame):
         return group
 
     def _create_array_group(self) -> QGroupBox:
+        """创建当前变体的阵列使能控件。"""
         group = QGroupBox(f"{self.variant.value}阵列")
         layout = QHBoxLayout(group)
         self.array_enabled_check = QCheckBox("使能")
@@ -151,6 +156,7 @@ class AFDTR1024Panel(QFrame):
         return group
 
     def _create_pa_group(self) -> QGroupBox:
+        """创建仅 AFDT1024 可用的推动 PA 控件。"""
         group = QGroupBox("推动PA")
         layout = QHBoxLayout(group)
         self.pa_enabled_check = QCheckBox("使能")
@@ -161,6 +167,7 @@ class AFDTR1024Panel(QFrame):
         return group
 
     def _create_polarization_group(self) -> QGroupBox:
+        """创建 LHCP/RHCP 极化选择控件。"""
         group = QGroupBox("极化设置")
         layout = QHBoxLayout(group)
         self.lhcp_radio = QRadioButton("LHCP")
@@ -174,6 +181,7 @@ class AFDTR1024Panel(QFrame):
         return group
 
     def _create_status_group(self) -> QGroupBox:
+        """创建按子阵展示查询 1 和查询 2 合并状态的表格。"""
         beam_columns = ["极化", "使能", "频率(MHz)", "BeamV", "BeamH"]
         prefix = ["ID", "电压(V)", "温度(°C)"]
         if self.variant.is_tx:
@@ -198,6 +206,7 @@ class AFDTR1024Panel(QFrame):
         return group
 
     def _create_log_group(self) -> QGroupBox:
+        """创建显示当前页面 Driver 日志的只读文本区域。"""
         group = QGroupBox("日志")
         layout = QVBoxLayout(group)
         self.log_text = QPlainTextEdit()
@@ -211,6 +220,7 @@ class AFDTR1024Panel(QFrame):
 
     @staticmethod
     def parse_subarray_ids(text: str) -> list[int]:
+        """解析逗号分隔的十进制或十六进制子阵 ID，并去重排序。"""
         ids: list[int] = []
         for token in text.replace("，", ",").split(","):
             token = token.strip()
@@ -226,6 +236,11 @@ class AFDTR1024Panel(QFrame):
 
     @staticmethod
     def generate_subarray_ids(columns: int, rows_per_column: int) -> list[int]:
+        """按 1 或 2 列阵列规则生成 0x01~0x1F 范围内的子阵 ID。
+
+        Raises:
+            ValueError: 列数或每列数量超出页面支持范围。
+        """
         if columns not in (1, 2):
             raise ValueError("阵列列数只支持 1 或 2")
         if not 1 <= rows_per_column <= 15:
@@ -237,14 +252,17 @@ class AFDTR1024Panel(QFrame):
         ]
 
     def subarray_ids(self) -> list[int]:
+        """返回当前输入框中合法且排序后的子阵 ID。"""
         return self.parse_subarray_ids(self.id_list_edit.text())
 
     @staticmethod
     def _format_id(device_id: int) -> str:
+        """将设备 ID 格式化为两位十六进制显示文本。"""
         return f"0x{device_id:02X}"
 
     @Slot()
     def _generate_ids(self) -> None:
+        """根据阵列拼接控件生成 ID，并刷新目标和状态表。"""
         ids = self.generate_subarray_ids(
             self.column_combo.currentIndex() + 1,
             self.row_count_spin.value(),
@@ -254,10 +272,12 @@ class AFDTR1024Panel(QFrame):
 
     @Slot()
     def _on_id_list_changed(self) -> None:
+        """在 ID 文本变更后重建目标列表和状态表行。"""
         self._refresh_target_combo()
         self._rebuild_status_table()
 
     def _refresh_target_combo(self) -> None:
+        """用当前合法 ID 更新目标下拉框，并尽量保持既有选择。"""
         current = self.target_combo.currentText() if hasattr(self, "target_combo") else ""
         if not hasattr(self, "target_combo"):
             return
@@ -272,6 +292,7 @@ class AFDTR1024Panel(QFrame):
         self.target_combo.blockSignals(False)
 
     def target_device_id(self) -> int:
+        """返回当前寻址字节；广播为 0，勾选时为子阵 ID 加 ``0x80``。"""
         text = self.target_combo.currentText()
         if text.startswith("全部"):
             return 0
@@ -284,6 +305,7 @@ class AFDTR1024Panel(QFrame):
         return device_id
 
     def _rebuild_status_table(self) -> None:
+        """按当前子阵 ID 重建状态表，未知字段显示为 ``N/A``。"""
         if not hasattr(self, "status_table"):
             return
         ids = self.subarray_ids()
@@ -297,6 +319,7 @@ class AFDTR1024Panel(QFrame):
 
     @Slot(dict)
     def update_status(self, info: dict) -> None:
+        """将 Driver 发出的单个子阵合并状态渲染到对应表格行。"""
         device_id = info.get("device_id")
         if device_id is None:
             return
@@ -305,6 +328,7 @@ class AFDTR1024Panel(QFrame):
             return
 
         def set_column(name: str, value: object) -> None:
+            """仅在该变体拥有目标列时写入当前状态表单元格。"""
             column = self._column_index.get(name)
             if column is not None:
                 self.status_table.setItem(row, column, QTableWidgetItem(str(value)))
@@ -328,11 +352,13 @@ class AFDTR1024Panel(QFrame):
 
     @Slot(str, int)
     def _connect_driver(self, port: str, baudrate: int) -> None:
+        """停止旧连接后创建并启动新 Driver，给所有异步槽绑定连接代际。"""
         if self._shutdown:
             self.connection.set_disconnected("页面已停止")
             return
         if not self.disconnect_device():
             return
+        # 每次重连都更换代际，旧线程排队的 Qt 信号不得覆盖新连接的 UI。
         self._connection_generation += 1
         generation = self._connection_generation
         self.connection.set_connecting()
@@ -376,6 +402,7 @@ class AFDTR1024Panel(QFrame):
             QMessageBox.warning(self, "串口错误", str(exc))
 
     def _is_current_driver(self, driver: AFDTR1024Driver, generation: int) -> bool:
+        """判断异步信号是否仍属于当前 Driver 与当前连接代际。"""
         return driver is self.driver and generation == self._connection_generation
 
     def _append_driver_log(
@@ -384,6 +411,7 @@ class AFDTR1024Panel(QFrame):
         generation: int,
         message: str,
     ) -> None:
+        """仅追加当前连接代际 Driver 的日志，忽略陈旧线程信号。"""
         if self._is_current_driver(driver, generation):
             self.log_text.appendPlainText(message)
 
@@ -394,6 +422,7 @@ class AFDTR1024Panel(QFrame):
         opened: bool,
         message: str,
     ) -> None:
+        """将当前 Driver 的打开结果同步到串口连接状态控件。"""
         if not self._is_current_driver(driver, generation):
             return
         if opened:
@@ -407,6 +436,7 @@ class AFDTR1024Panel(QFrame):
         generation: int,
         info: dict,
     ) -> None:
+        """仅接受当前连接代际的状态信号并更新状态表。"""
         if self._is_current_driver(driver, generation):
             self.update_status(info)
 
@@ -416,10 +446,12 @@ class AFDTR1024Panel(QFrame):
         generation: int,
         command: str,
     ) -> None:
+        """仅显示当前连接代际的配置回显成功消息。"""
         if self._is_current_driver(driver, generation):
             self._on_config_success(command)
 
     def _on_driver_finished(self, driver: AFDTR1024Driver) -> None:
+        """回收已结束 Driver；若仍为当前连接则更新 UI 状态。"""
         if driver is self.driver:
             self.driver = None
             self.connection.set_disconnected("串口已关闭")
@@ -427,6 +459,7 @@ class AFDTR1024Panel(QFrame):
 
     @Slot()
     def _disconnect_driver(self) -> None:
+        """处理串口控件的断开请求。"""
         self.disconnect_device()
 
     def disconnect_device(self) -> bool:
@@ -447,9 +480,11 @@ class AFDTR1024Panel(QFrame):
 
     @Slot(str)
     def _on_config_success(self, command: str) -> None:
+        """在页面日志中记录已收到配置回显的指令名称。"""
         self.log_text.appendPlainText(f"✓ {command}配置成功")
 
     def _active_driver(self) -> Optional[AFDTR1024Driver]:
+        """返回运行中的 Driver；未连接时提示用户并返回 ``None``。"""
         if self.driver is None or not self.driver.running:
             QMessageBox.warning(self, "警告", "请先打开串口")
             return None
@@ -457,6 +492,7 @@ class AFDTR1024Panel(QFrame):
 
     @Slot()
     def _apply_beam(self) -> None:
+        """读取 MHz/度输入并向当前目标发送波束设置。"""
         driver = self._active_driver()
         if driver is None:
             return
@@ -476,6 +512,7 @@ class AFDTR1024Panel(QFrame):
 
     @Slot()
     def _apply_array_enabled(self) -> None:
+        """向当前目标发送阵列使能或关闭命令。"""
         driver = self._active_driver()
         if driver is None:
             return
@@ -486,6 +523,7 @@ class AFDTR1024Panel(QFrame):
 
     @Slot()
     def _apply_pa_enabled(self) -> None:
+        """向当前 AFDT1024 目标发送推动 PA 使能命令。"""
         driver = self._active_driver()
         if driver is None:
             return
@@ -496,6 +534,7 @@ class AFDTR1024Panel(QFrame):
 
     @Slot()
     def _apply_polarization(self) -> None:
+        """将页面极化单选状态发送给当前目标。"""
         driver = self._active_driver()
         if driver is None:
             return
@@ -507,6 +546,7 @@ class AFDTR1024Panel(QFrame):
 
     @Slot()
     def _query_all_status(self) -> None:
+        """按当前 ID 列表调度查询 1/查询 2，避免在 UI 线程集中发送。"""
         driver = self._active_driver()
         if driver is None:
             return
@@ -552,10 +592,12 @@ class AFDTR1024Panel(QFrame):
         return True
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt API
+        """Qt 显示事件：恢复工作区所需的端口扫描。"""
         self.activate()
         super().showEvent(event)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        """Qt 关闭事件：仅在串口停止成功后允许窗口销毁。"""
         if not self.shutdown():
             event.ignore()
             return
@@ -563,12 +605,18 @@ class AFDTR1024Panel(QFrame):
 
 
 class TXPanel(AFDTR1024Panel):
+    """将共用页面固定为 AFDT1024 发射端变体的便捷子类。"""
+
     def __init__(self, parent=None, driver_factory: Callable[..., AFDTR1024Driver] = AFDTR1024Driver):
+        """创建 AFDT1024 页面，可注入 Driver 工厂用于测试。"""
         super().__init__(DeviceVariant.TX, parent=parent, driver_factory=driver_factory)
 
 
 class RXPanel(AFDTR1024Panel):
+    """将共用页面固定为 AFDR1024 接收端变体的便捷子类。"""
+
     def __init__(self, parent=None, driver_factory: Callable[..., AFDTR1024Driver] = AFDTR1024Driver):
+        """创建 AFDR1024 页面，可注入 Driver 工厂用于测试。"""
         super().__init__(DeviceVariant.RX, parent=parent, driver_factory=driver_factory)
 
 

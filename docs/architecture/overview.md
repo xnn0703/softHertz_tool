@@ -140,7 +140,9 @@ shutdown() -> bool
 
 ## 7. 高频数据与可观测性
 
-所有设备通过 `FrameRecord` 输出统一事件：
+所有设备通过 `FrameRecord` 输出统一事件。`FrameRecord.model` 保存公开硬件型号；
+`FrameRecord.port` 保存串口名或 `串口名/稳定连接标签` 的可读值，不能另建不兼容的
+`endpoint` 字段：
 
 - `TX`：已进入发送路径的完整帧；
 - `RX`：已接收并解析的完整帧；
@@ -179,7 +181,11 @@ Workspace 由静态 registry 声明。每个条目包含稳定 key、UI 标题�
 - PyInstaller 收集模块；
 - 主窗口遍历 Workspace，而不维护逐设备特判。
 
-PyInstaller 从 `packaging/entrypoint.py` 进入正式包，构建脚本位于 `packaging/build_windows.py`。源代码、editable install 和打包产物都通过包内资源定位加载 PNG/ICO。
+源码入口为 `python -m soft_hertz_tool`，安装后 CLI 为 `soft-hertz-tool`；两个模拟器 CLI
+分别为 `soft-hertz-afdtr-sim` 和 `soft-hertz-qs-sim`。PyInstaller 从
+`packaging/entrypoint.py` 进入同一模块入口，构建脚本位于 `packaging/build_windows.py`。
+源代码、editable install 和打包产物都通过包内资源定位加载 PNG/ICO；`--smoke` 仅创建并
+自动关闭主窗口，用于启动冒烟。
 
 ## 9. 产品状态与持久化
 
@@ -189,6 +195,9 @@ PyInstaller 从 `packaging/entrypoint.py` 进入正式包，构建脚本位于 `
 - 工作区选择保存在 QSettings；
 - 配置迁移只复制有效偏好，不删除旧配置；
 - 日志和用户导出文件不写入源码目录。
+
+当前 Python 包版本 `0.0.0` 是开发占位值；在版本单一来源实现前，tag、Release 和包元数据
+不等价，不能互相替代发布验收记录中的版本字段。
 
 不得使用 QSettings 保存口令、访问令牌或客户敏感数据。
 

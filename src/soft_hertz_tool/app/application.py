@@ -26,7 +26,17 @@ QLabel#panelTitle {
 
 
 def configure_application(app: QApplication) -> None:
-    """应用统一外观；macOS 保持原生，Windows 使用 Fusion。"""
+    """配置产品身份、字体和跨平台外观。
+
+    Args:
+        app: 当前进程唯一的 Qt 应用实例。
+
+    Returns:
+        无返回值；直接更新 ``app`` 的组织名、应用名、字体、样式和样式表。
+
+    Notes:
+        macOS 保留原生控件风格；Windows 使用 Fusion 以减少系统主题差异。
+    """
     app.setOrganizationName(SETTINGS_ORGANIZATION)
     app.setApplicationName(SETTINGS_APPLICATION)
     app.setApplicationDisplayName(PRODUCT_DISPLAY_NAME)

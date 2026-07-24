@@ -18,6 +18,11 @@ class StreamEvent:
 
     @property
     def is_frame(self) -> bool:
+        """判断事件是否为待协议层校验的完整候选帧。
+
+        Returns:
+            ``kind`` 为 ``frame`` 时返回 ``True``；否则表示应记录为 ``DROP``。
+        """
         return self.kind == "frame"
 
 
@@ -25,16 +30,35 @@ class KaUDCStreamParser:
     """增量解析固定 12 字节帧，支持半帧、粘包和帧前垃圾数据。"""
 
     def __init__(self) -> None:
+        """创建空缓冲区的增量固定帧解析器。"""
         self._buffer = bytearray()
 
     @property
     def buffered_bytes(self) -> bytes:
+        """返回尚不足一个完整帧的缓存副本。
+
+        Returns:
+            不可变字节副本；仅用于诊断和测试，不可用于修改解析器状态。
+        """
         return bytes(self._buffer)
 
     def reset(self) -> None:
+        """丢弃未完成半帧，在断开或确认停止后恢复初始状态。"""
         self._buffer.clear()
 
     def feed(self, data: bytes) -> List[StreamEvent]:
+        """增量输入串口字节并提取完整候选帧与可诊断丢弃事件。
+
+        Args:
+            data: 任意长度的串口读取块，可包含半帧、粘包或帧前垃圾字节。
+
+        Returns:
+            按接收顺序排列的完整候选帧和 ``DROP`` 事件。CRC 校验由协议层完成。
+
+        状态:
+            数据不足 12 字节时保留到下一次调用；找不到帧头时保留末尾单个 ``0xAA``，
+            使跨读取块的 ``AA 55`` 帧头不会被误丢弃。
+        """
         if data:
             self._buffer.extend(data)
 

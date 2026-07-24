@@ -10,6 +10,14 @@ from soft_hertz_tool.devices.afd01_qs.protocol import FRAME_MAGIC, MAX_PAYLOAD, 
 
 @dataclass(frozen=True)
 class StreamEvent:
+    """增量拆帧产生的完整帧或丢弃事件。
+
+    Attributes:
+        kind: 事件类别，如 ``frame``、``garbage``、``bad_length``、``bad_frame``。
+        data: 对应原始字节。
+        parsed: 完整且校验通过时的协议解码结果。
+        message: 诊断信息。
+    """
     kind: str
     data: bytes
     parsed: Optional[Dict[str, Any]] = None
@@ -20,9 +28,18 @@ class FrameStreamParser:
     """支持分包、粘包和异常字节恢复的增量分帧器。"""
 
     def __init__(self) -> None:
+        """创建空接收缓冲区。"""
         self.buffer = bytearray()
 
     def feed(self, data: bytes) -> List[StreamEvent]:
+        """接收任意字节块并产出可解析帧与恢复诊断。
+
+        Args:
+            data: 新到达的串口字节，可为分包、粘包或含异常字节的数据。
+
+        Returns:
+            本次可确定的帧或丢弃事件；不完整尾帧保留到下一次调用。
+        """
         self.buffer.extend(data)
         events: List[StreamEvent] = []
 
@@ -43,7 +60,7 @@ class FrameStreamParser:
             length = int.from_bytes(self.buffer[2:4], "big")
             if length > MAX_PAYLOAD:
                 bad = bytes(self.buffer[:4])
-                # 只移除当前帧头，让后续字节仍有机会被重新同步。
+                # A0/A1 高速流可能紧随坏头到达；只丢当前 magic，保留后续字节用于重新同步。
                 del self.buffer[0]
                 events.append(StreamEvent("bad_length", bad, message=f"非法载荷长度 {length}"))
                 continue
@@ -60,4 +77,5 @@ class FrameStreamParser:
         return events
 
     def reset(self) -> None:
+        """丢弃尚未完成的接收缓冲区。"""
         self.buffer.clear()

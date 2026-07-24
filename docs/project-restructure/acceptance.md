@@ -4,7 +4,7 @@
 
 ## 1. 范围确认
 
-- [x] 已确认仓库、本地工程目录统一命名为 `softHertz_tool`。
+- [x] 已确认远端仓库名为 `softHertz_tool`，本地编号目录为 `2-softHertz_tool` 且直接作为仓库根。
 - [x] 已确认 UI 产品名为 `SoftHertz Tool`。
 - [x] 已确认 Windows 产物名为 `SoftHertz_Tool.exe`。
 - [x] 已确认旧 PyQt5 独有的 DEBUG、TCP、UDP 和多通道曲线功能正式退役。
@@ -121,7 +121,7 @@ Windows CI 打包成功不等于客户环境和真实设备验收完成。
 - [x] Gitee 仓库改名为 `softHertz_tool` 后，`origin` URL 已更新并验证。
 - [x] GitHub 仓库改名为 `softHertz_tool` 后，`github` URL 已更新并验证。
 - [x] GitHub 仍只用于发布，未同步本次开发提交或创建 Release。
-- [x] 本地仓库目录最终改名为 `softHertz_tool`，虚拟环境已重建。
+- [x] 本地编号目录最终改名为 `2-softHertz_tool`，中间 `softHertz_tool` 已去除，虚拟环境已重建。
 
 ## 11. 验收边界
 

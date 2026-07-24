@@ -27,6 +27,7 @@ class AFDTR1024Driver(SerialThread):
         variant: Union[DeviceVariant, str],
         parent=None,
     ):
+        """初始化指定串口和 AFDT1024/AFDR1024 变体的驱动实例。"""
         super().__init__(port_name, baudrate, timeout=0.01, idle_ms=5, parent=parent)
         self.variant = DeviceVariant.coerce(variant)
         self.device_type = self.variant.value
@@ -36,9 +37,11 @@ class AFDTR1024Driver(SerialThread):
 
     @property
     def endpoint(self) -> str:
+        """返回用于日志和帧监视器的“串口/硬件型号”端点名称。"""
         return f"{self.port_name}/{self.variant.model_name}"
 
     def handle_bytes(self, data: bytes) -> None:
+        """在串口线程拆分输入字节，并发布有效帧或丢弃诊断记录。"""
         for event in self.stream.feed(data):
             if event.is_frame:
                 self._process_frame(event.raw)
@@ -57,6 +60,7 @@ class AFDTR1024Driver(SerialThread):
             self.log_signal.emit(f"✗ {event.reason}: {event.raw.hex().upper()}")
 
     def _process_frame(self, frame: bytes) -> None:
+        """解析一帧协议数据，分派状态回读、波束回读或配置回显。"""
         parsed, message = protocol.parse_response(frame)
         addr = parsed.get("addr") if parsed else None
         command = protocol.command_name(addr) if addr is not None else self.variant.value
@@ -110,6 +114,7 @@ class AFDTR1024Driver(SerialThread):
         message: str,
         label: str,
     ) -> None:
+        """合并单个子阵的查询结果并发出面向 UI 的状态快照。"""
         if message != "OK" or not info:
             self.log_signal.emit(f"✗ {label}解析失败: {message}")
             return
@@ -156,10 +161,12 @@ class AFDTR1024Driver(SerialThread):
         return True
 
     def _require_open(self) -> None:
+        """确认串口线程已运行，否则抛出 ``ConnectionError``。"""
         if not self.running:
             raise ConnectionError(f"{self.variant.model_name} 串口未连接")
 
     def _send_required(self, frame: bytes) -> None:
+        """发送必须成功的完整帧；未连接或入队失败时抛出 ``ConnectionError``。"""
         self._require_open()
         if not self.send_frame(frame):
             raise ConnectionError(f"{self.variant.model_name} 帧发送失败")
@@ -171,22 +178,41 @@ class AFDTR1024Driver(SerialThread):
         theta: float,
         phi: float,
     ) -> BeamSetting:
+        """设置目标子阵波束。
+
+        Args:
+            device_id: 目标 ID，可为广播 ID ``0``。
+            frequency_mhz: 请求频率，单位 MHz。
+            theta: 俯仰角，单位度。
+            phi: 方位角，单位度。
+
+        Returns:
+            经协议频率网格量化后的实际设置。
+
+        Raises:
+            ValueError: 频率或角度参数不满足协议约束。
+            ConnectionError: 串口未连接或帧未能入队。
+        """
         setting = protocol.make_beam_setting(frequency_mhz, theta, phi, self.variant)
         self._send_required(protocol.build_beam_frame(device_id, setting, self.variant))
         return setting
 
     def set_array_enabled(self, device_id: int, enabled: bool) -> None:
+        """设置 AFDT1024 或 AFDR1024 的目标阵列使能状态。"""
         self._send_required(protocol.build_enable_frame(device_id, enabled, self.variant))
 
     def set_polarization(self, device_id: int, polarization: int) -> None:
+        """设置目标子阵极化；``0`` 为 LHCP，``1`` 为 RHCP。"""
         self._send_required(protocol.build_polarization_frame(device_id, polarization, self.variant))
 
     def set_pa_enabled(self, device_id: int, enabled: bool) -> None:
+        """设置 AFDT1024 推动 PA；AFDR1024 调用时抛出 ``ValueError``。"""
         if not self.variant.is_tx:
             raise ValueError("AFDR1024 不支持 PA 使能")
         self._send_required(protocol.build_pa_enable_frame(device_id, enabled))
 
     def set_phase_calibration(self, device_id: int, phase_offset: int) -> None:
+        """按当前硬件变体发送相位校准值，协议值被限制为 0~63。"""
         if self.variant.is_tx:
             frame = protocol.build_phase_cal_frame(device_id, phase_offset)
         else:
@@ -224,6 +250,7 @@ class AFDTR1024Driver(SerialThread):
 
         frames: list[bytes] = []
         for subarray_id in ids:
+            # +0x80 是“仅本子阵”寻址位；状态缓存仍以低 7 位子阵号归并。
             device_id = (subarray_id + 0x80) & 0xFF if plus_0x80 else subarray_id
             frames.extend(protocol.build_query_frames(device_id, self.variant))
 
@@ -233,6 +260,7 @@ class AFDTR1024Driver(SerialThread):
                 if not self.send_frame(frame):
                     raise ConnectionError(f"{self.variant.model_name} 查询发送失败")
                 continue
+            # 首帧即时验证发送链路，其余帧错开投递，避免 UI 调用一次性占满发送队列。
             QTimer.singleShot(
                 index * interval_ms,
                 partial(self._send_scheduled, frame, generation),
@@ -240,13 +268,18 @@ class AFDTR1024Driver(SerialThread):
         return len(ids)
 
     def _send_scheduled(self, frame: bytes, generation: int) -> None:
+        """在代际仍有效且串口运行时发送延迟查询帧。"""
+
+        # stop() 递增代际，使已登记的 QTimer 回调不会向已关闭串口发送数据。
         if generation == self._schedule_generation and self.running:
             self.send_frame(frame)
 
     def status_snapshot(self) -> dict[int, dict]:
+        """返回按低 7 位子阵 ID 索引的状态副本，不暴露内部模型。"""
         return {subarray_id: status.as_dict() for subarray_id, status in self._status_by_id.items()}
 
     def stop(self, timeout_ms: int = 3000) -> bool:
+        """取消待调度查询后停止串口线程，超时时返回 ``False``。"""
         self._schedule_generation += 1
         return super().stop(timeout_ms)
 

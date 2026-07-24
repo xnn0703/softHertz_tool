@@ -33,12 +33,30 @@ ARRAY_MASKS = {8: 0xFF, 7: 0xFE, 6: 0x7E, 5: 0x7C, 4: 0x3C}
 
 
 def checksum(data: bytes) -> int:
-    """计算协议 16 bit 累加和。"""
+    """计算协议体的 16 位无符号累加和。
+
+    Args:
+        data: 不含帧头和末尾校验字段的协议字节。
+
+    Returns:
+        对 0x10000 取模的校验和。
+    """
     return sum(data) & 0xFFFF
 
 
 def build_frame(command: int, payload: bytes = b"") -> bytes:
-    """构建完整 QS 帧。"""
+    """构建带帧头、大端长度和校验和的完整 QS 帧。
+
+    Args:
+        command: uint8 QS 命令号。
+        payload: 命令载荷，长度不能超过 ``MAX_PAYLOAD``。
+
+    Returns:
+        可直接送入串口的完整协议帧。
+
+    Raises:
+        ValueError: 命令号不在 uint8 范围或载荷过长。
+    """
     if not 0 <= command <= 0xFF:
         raise ValueError("指令号超出 uint8 范围")
     if len(payload) > MAX_PAYLOAD:
@@ -48,7 +66,14 @@ def build_frame(command: int, payload: bytes = b"") -> bytes:
 
 
 def parse_frame(frame: bytes) -> Tuple[Optional[Dict[str, Any]], str]:
-    """校验并解码一个完整帧。"""
+    """校验并解码一个已完整收集的 QS 帧。
+
+    Args:
+        frame: 含帧头、长度、载荷和校验和的完整原始帧。
+
+    Returns:
+        成功时返回解码字典和 ``OK``；失败时返回 ``None`` 与诊断文本。
+    """
     if len(frame) < 6:
         return None, "帧长度不足"
     if frame[0] != FRAME_MAGIC:
@@ -79,12 +104,35 @@ def parse_frame(frame: bytes) -> Tuple[Optional[Dict[str, Any]], str]:
 
 
 def _require(payload: bytes, length: int, command: int) -> None:
+    """确认载荷长度与指定命令的固定格式一致。
+
+    Args:
+        payload: 待检查的载荷字节。
+        length: 协议规定的精确载荷长度。
+        command: 命令号，用于错误诊断。
+
+    Raises:
+        ValueError: 载荷长度不匹配。
+    """
     if len(payload) != length:
         raise ValueError(f"0x{command:02X} 载荷长度应为 {length}，实际 {len(payload)}")
 
 
 def decode_payload(command: int, payload: bytes) -> Dict[str, Any]:
-    """解码设备主动上报的 A0/A1 载荷。"""
+    """解码 A0/A1 语义字段，或保留其他命令的原始载荷。
+
+    Args:
+        command: QS 命令号。
+        payload: 已通过帧级校验的命令载荷。
+
+    Returns:
+        A0 返回含物理量的字典，其中角度字段单位为度；A1 返回阵列状态；
+        其他命令返回十六进制载荷。
+
+    Raises:
+        ValueError: A0 或 A1 的固定载荷长度不正确。
+        struct.error: 载荷无法按协议字段解包。
+    """
     if command == 0xA0:
         _require(payload, 42, command)
         values = struct.unpack(">BhhHffffBBhhhhhBBBI", payload)
@@ -130,10 +178,35 @@ def decode_payload(command: int, payload: bytes) -> Dict[str, Any]:
 
 
 def build_snr_report(snr: float, indicator: int, power: int, reboot: int) -> bytes:
+    """构建 0x01 SNR 与电源/重启状态上报帧。
+
+    Args:
+        snr: 信噪比浮点值。
+        indicator: uint8 指示值。
+        power: uint8 电源状态。
+        reboot: uint8 重启状态。
+
+    Returns:
+        按大端字段编码且带校验和的完整 QS 帧。
+    """
     return build_frame(0x01, struct.pack(">fBBB", snr, indicator, power, reboot))
 
 
 def build_beam_config(lon_deg: float, polar: int, rx_freq: float, tx_freq: float) -> bytes:
+    """构建 0x02 卫星经度、极化和收发频率配置帧。
+
+    Args:
+        lon_deg: 卫星经度，单位为度，编码精度 0.01 度。
+        polar: uint8 极化值。
+        rx_freq: 接收频率，单位 MHz。
+        tx_freq: 发射频率，单位 MHz。
+
+    Returns:
+        完整 QS 帧。
+
+    Raises:
+        ValueError: 经度超出 -180 至 180 度。
+    """
     lon = round(lon_deg * 100)
     if not -18000 <= lon <= 18000:
         raise ValueError("卫星经度必须在 -180~180°")
@@ -141,12 +214,36 @@ def build_beam_config(lon_deg: float, polar: int, rx_freq: float, tx_freq: float
 
 
 def build_u8_command(command: int, value: int) -> bytes:
+    """构建载荷为单个 uint8 的控制帧。
+
+    Args:
+        command: QS 命令号。
+        value: 要编码的 uint8 值。
+
+    Returns:
+        完整 QS 帧。
+
+    Raises:
+        ValueError: value 不在 uint8 范围内。
+    """
     if not 0 <= value <= 0xFF:
         raise ValueError("参数超出 uint8 范围")
     return build_frame(command, struct.pack("B", value))
 
 
 def build_angle_command(command: int, angle_deg: float) -> bytes:
+    """构建以 0.01 度编码的航向角控制帧。
+
+    Args:
+        command: QS 命令号。
+        angle_deg: 角度，单位为度，范围 0 至 360。
+
+    Returns:
+        完整 QS 帧。
+
+    Raises:
+        ValueError: 角度超出协议范围。
+    """
     value = round(angle_deg * 100)
     if not 0 <= value <= 36000:
         raise ValueError("角度必须在 0~360°")
@@ -154,6 +251,19 @@ def build_angle_command(command: int, angle_deg: float) -> bytes:
 
 
 def build_beam_angle(command: int, theta_deg: float, phi_deg: float) -> bytes:
+    """构建 TX、RX 或共同波束角命令。
+
+    Args:
+        command: 0x07（TX）、0x09（RX）或 0x0A（共同）。
+        theta_deg: 俯仰角，单位为度，范围 0 至 90。
+        phi_deg: 方位角，单位为度，范围 0 至 360。
+
+    Returns:
+        以 0.01 度大端编码的完整 QS 帧。
+
+    Raises:
+        ValueError: 命令号或角度范围非法。
+    """
     theta = round(theta_deg * 100)
     phi = round(phi_deg * 100)
     if command not in (0x07, 0x09, 0x0A):
@@ -164,7 +274,32 @@ def build_beam_angle(command: int, theta_deg: float, phi_deg: float) -> bytes:
 
 
 def build_tle(line1: str, line2: str) -> bytes:
+    """构建 0x08 固定 69 ASCII 字节双行 TLE 配置帧。
+
+    Args:
+        line1: 第一行 TLE。
+        line2: 第二行 TLE。
+
+    Returns:
+        完整 QS 帧；不足 69 字节的行以空格补齐。
+
+    Raises:
+        UnicodeEncodeError: 输入包含非 ASCII 字符。
+        ValueError: 任一行超过 69 个 ASCII 字节。
+    """
     def fixed(line: str) -> bytes:
+        """把单行 TLE 转为定长 ASCII 字段。
+
+        Args:
+            line: 待编码的单行 TLE。
+
+        Returns:
+            右侧空格补齐到 69 字节的 ASCII 字段。
+
+        Raises:
+            UnicodeEncodeError: 输入包含非 ASCII 字符。
+            ValueError: 编码结果超过 69 字节。
+        """
         encoded = line.encode("ascii", errors="strict")
         if len(encoded) > 69:
             raise ValueError("TLE 单行不能超过 69 个 ASCII 字符")
@@ -174,10 +309,27 @@ def build_tle(line1: str, line2: str) -> bytes:
 
 
 def build_array_query() -> bytes:
+    """构建 0x0B 阵列规模查询帧。
+
+    Returns:
+        操作码为查询、TX/RX 字段均为零的完整 QS 帧。
+    """
     return build_frame(0x0B, b"\x00\x00\x00")
 
 
 def build_array_set(tx_size: Optional[int], rx_size: Optional[int]) -> bytes:
+    """构建 0x0B KA256 TX/RX 阵列规模设置帧。
+
+    Args:
+        tx_size: TX 边长；``None`` 编码为 0xFF，表示保持当前值。
+        rx_size: RX 边长；``None`` 编码为 0xFF，表示保持当前值。
+
+    Returns:
+        操作码为设置的完整 QS 帧。
+
+    Raises:
+        ValueError: 非保持值不属于 4、5、6、7、8。
+    """
     tx = 0xFF if tx_size is None else tx_size
     rx = 0xFF if rx_size is None else rx_size
     if tx != 0xFF and tx not in ARRAY_MASKS:
@@ -188,7 +340,15 @@ def build_array_set(tx_size: Optional[int], rx_size: Optional[int]) -> bytes:
 
 
 def describe(parsed: Optional[Dict[str, Any]], message: str) -> str:
-    """为帧监视器生成简短、低开销摘要。"""
+    """为帧监视器生成简短、低开销的可读摘要。
+
+    Args:
+        parsed: 已解码帧；解析失败时为 ``None``。
+        message: 帧解析结果或错误文本。
+
+    Returns:
+        A0/A1 的关键状态摘要，或普通命令名/错误文本。
+    """
     if parsed is None:
         return message
     command = parsed["command"]

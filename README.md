@@ -48,7 +48,7 @@ AFDT1024/AFDR1024 支持一条总线连接多个子阵：
 
 ### AFD01_QS 工作区
 
-- 支持 QS V1.6 指令 `0x01`～`0x0B` 的构造、发送及相关回读；
+- 支持 QS V1.6 的 `0x01`～`0x0A` 控制命令、`0x0B/0xA1` 阵列规模查询与设置，以及 `0xA0` 实时状态解析；
 - 解析 `0xA0` 实时状态，串口链路可接收约 100 Hz 数据，业务 UI 最多按 10 Hz 刷新；
 - 使用滑动窗口显示 A0 上报频率，超过 1 秒未收到 A0 时显示超时；
 - 通过 `0x0B/0xA1` 查询和设置 TX/RX 阵列规模；
@@ -138,7 +138,8 @@ flowchart LR
 │   ├── development/
 │   │   ├── standards.md            # 编码、协议、线程和测试规范
 │   │   ├── adding-device.md        # 新增设备/工作区步骤
-│   │   └── acceptance-boundaries.md
+│   │   ├── acceptance-boundaries.md
+│   │   └── documentation-sync/     # 当前文档与实现同步计划、验收和开发记录
 │   ├── protocols/
 │   │   ├── controlled-originals/   # 受控协议原件
 │   │   └── readable-notes/         # 便于检索的协议说明
@@ -240,6 +241,19 @@ python -m soft_hertz_tool
 soft-hertz-tool
 ```
 
+### 一键模拟器与启动冒烟
+
+`run.sh` 和 `run.bat` 除默认 `app` 模式外，还支持：
+
+```bash
+./run.sh afdtr-sim <TX模拟器端口> <RX模拟器端口> --ids 1,2,3
+./run.sh qs-sim <QS模拟器端口> --baudrate 921600
+./run.sh app --smoke
+```
+
+Windows 使用等价的 `run.bat afdtr-sim ...`、`run.bat qs-sim ...` 和 `run.bat app --smoke`。
+`--smoke` 只验证应用能创建并关闭主窗口；不验证串口、真实设备或长期运行。
+
 ## 无硬件联调
 
 模拟器与上位机必须连接一对虚拟串口的不同端点。同一端口不能同时被两个进程打开。
@@ -286,7 +300,7 @@ python -m pytest -q
 | --- | --- |
 | `tests/devices` | 协议向量、边界值、流式拆帧、Driver、Panel、模拟器和设备业务回归 |
 | `tests/shared` | 串口线程停止/写入、报文监视、异步日志与轮转 |
-| `tests/integration` | workspace registry、切换/退出、配置命名空间、依赖方向和仓库结构 |
+| `tests/integration` | workspace registry、切换/退出、配置命名空间、入口/打包、依赖方向、注释契约和仓库结构 |
 
 每次修改至少执行与风险相匹配的验证：
 
@@ -322,6 +336,9 @@ dist/SoftHertz_Tool.exe
 5. 生成 `SoftHertz_Tool.exe.sha256`；
 6. 上传 `SoftHertz_Tool-windows` Artifact；
 7. tag 构建时将 EXE 和 SHA256 文件附加到 GitHub Release。
+
+当前 Python 包版本 `0.0.0` 是开发占位值。tag、GitHub Release 和包元数据尚未由单一来源生成，
+因此 tag 构建只能作为候选构建，不能将 tag 名直接视为包版本或已完成的发布版本。
 
 最低版本测试使用 `packaging/constraints-test-py39.txt`，发布构建使用
 `packaging/constraints-windows-py311.txt`。依赖升级必须同步更新约束文件并重新完成 Windows 原生冒烟。

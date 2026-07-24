@@ -20,6 +20,12 @@ class ArrayGridWidget(QWidget):
     }
 
     def __init__(self, title: str, parent=None):
+        """创建固定 8×8 KA256 阵列状态网格。
+
+        Args:
+            title: 网格标题，通常为 ``TX`` 或 ``RX``。
+            parent: Qt 父对象。
+        """
         super().__init__(parent)
         self.cells = []
         layout = QGridLayout(self)
@@ -40,6 +46,13 @@ class ArrayGridWidget(QWidget):
         self.set_state(8, powered=True, state="active")
 
     def set_state(self, size: int, powered: bool, state: str = "active") -> None:
+        """按阵列边长、电源和业务状态刷新每个网格单元颜色。
+
+        Args:
+            size: 有效阵列边长，使用 ``ARRAY_MASKS`` 映射到行列掩码。
+            powered: 对应阵列电源是否打开。
+            state: ``active``、``cached``、``pending`` 或 ``failed`` 状态。
+        """
         mask = ARRAY_MASKS.get(size, 0)
         for row in range(8):
             for col in range(8):

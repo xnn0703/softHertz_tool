@@ -17,6 +17,16 @@ SMOKE_CLOSE_DELAY_MS = 250
 
 
 def _parse_arguments(argv: Sequence[str]) -> tuple[argparse.Namespace, list[str]]:
+    """解析应用自有参数，并保留 Qt 可识别的未知参数。
+
+    Args:
+        argv: 不包含可执行文件名的命令行参数。
+
+    Returns:
+        二元组：SoftHertz Tool 参数命名空间，以及需要继续传给
+        :class:`QApplication` 的参数列表。
+    """
+
     parser = argparse.ArgumentParser(description="SoftHertz 多设备串口调试工具")
     parser.add_argument(
         "--smoke",
@@ -27,9 +37,23 @@ def _parse_arguments(argv: Sequence[str]) -> tuple[argparse.Namespace, list[str]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """创建并运行 SoftHertz Tool Qt 应用。
+
+    Args:
+        argv: 可选的应用参数；为 ``None`` 时读取 ``sys.argv[1:]``。
+
+    Returns:
+        Qt 事件循环的退出码。
+
+    Notes:
+        ``--smoke`` 会创建真实主窗口并在短延时后关闭，只验证应用、资源与
+        生命周期能够启动，不验证串口或真实硬件。
+    """
+
     raw_arguments = list(sys.argv[1:] if argv is None else argv)
     options, qt_arguments = _parse_arguments(raw_arguments)
     application_arguments = [sys.argv[0], *qt_arguments]
+    # 测试或嵌入场景可能已经创建 QApplication；复用实例可避免 Qt 的单例冲突。
     app = QApplication.instance() or QApplication(application_arguments)
     configure_application(app)
     window = MainWindow()
@@ -49,6 +73,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         if smoke_timer is not None:
             smoke_timer.stop()
+        # 复用外部 QApplication 时必须恢复原值，避免 smoke 模式污染调用方生命周期。
         app.setQuitOnLastWindowClosed(previous_quit_on_close)
 
 

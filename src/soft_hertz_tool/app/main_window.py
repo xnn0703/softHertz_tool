@@ -30,11 +30,23 @@ from soft_hertz_tool.shared.ui.frame_monitor import FrameMonitorWidget
 
 
 class MainWindow(QMainWindow):
+    """组装静态工作区并协调切换、报文监视和全局退出。
+
+    主窗口只依赖 Workspace 生命周期契约，不创建或操作具体设备 Driver。
+    """
+
     def __init__(
         self,
         settings: Optional[QSettings] = None,
         legacy_settings: Optional[QSettings] = None,
     ):
+        """创建主窗口、全部工作区及共享报文监视器。
+
+        Args:
+            settings: 可选的当前产品设置对象，主要用于测试或定制存储位置。
+            legacy_settings: 可选的旧产品设置对象，仅用于首次选择项迁移。
+        """
+
         super().__init__()
         self.setWindowTitle(PRODUCT_DISPLAY_NAME)
         self._shutdown = False
@@ -86,10 +98,20 @@ class MainWindow(QMainWindow):
 
     @Slot(int)
     def _on_model_changed(self, index: int) -> None:
+        """事务性切换到组合框指定的工作区。
+
+        Args:
+            index: 目标工作区在静态 registry 中的索引。
+
+        Returns:
+            无返回值。旧工作区无法安全停用时，会恢复旧选项并取消切换。
+        """
+
         if not 0 <= index < len(self.workspaces) or index == self._active_index:
             return
         if 0 <= self._active_index < len(self.workspaces):
             if not self.workspaces[self._active_index].deactivate():
+                # 切换必须先释放隐藏页资源；失败时回滚 UI，不能让仍占串口的页面隐身。
                 self.workspaces[self._active_index].activate()
                 self.model_combo.blockSignals(True)
                 self.model_combo.setCurrentIndex(self._active_index)
@@ -101,8 +123,19 @@ class MainWindow(QMainWindow):
         self.settings.setValue(DEVICE_MODEL_KEY, self.model_combo.itemData(index))
 
     def shutdown(self) -> bool:
+        """按“可恢复停用—不可逆关闭”两阶段释放全部后台资源。
+
+        Returns:
+            全部 Workspace 和日志线程均可安全关闭时返回 ``True``；任一
+            Workspace 拒绝停用或关闭时返回 ``False``，调用方应取消退出。
+
+        Notes:
+            方法幂等。日志器最后关闭，确保设备停机过程中产生的末尾报文仍可落盘。
+        """
+
         if self._shutdown:
             return True
+        # 先执行仍可回滚的 deactivate；只有所有工作区准备完成才进入 shutdown。
         prepared = [workspace.deactivate() for workspace in self.workspaces]
         if not all(result is not False for result in prepared):
             if 0 <= self._active_index < len(self.workspaces):
@@ -118,6 +151,15 @@ class MainWindow(QMainWindow):
         return True
 
     def closeEvent(self, event) -> None:
+        """处理窗口关闭事件，并在后台线程未停止时拒绝退出。
+
+        Args:
+            event: Qt 传入的关闭事件；失败时调用 ``ignore()``。
+
+        Returns:
+            无返回值。
+        """
+
         if not self.shutdown():
             event.ignore()
             return

@@ -11,7 +11,8 @@
 
 本次迁移完成后：
 
-- 仓库和本地工程目录统一为 `softHertz_tool`。
+- Gitee/GitHub 仓库名统一为 `softHertz_tool`，本地编号目录为 `2-softHertz_tool`。
+- 本地编号目录直接作为仓库根，不再嵌套第二层 `softHertz_tool`。
 - 仓库根目录就是 Python 工程根，不再额外嵌套同名工程目录。
 - 正式实现只保留 `src/soft_hertz_tool`。
 - `app`、`workspaces`、`devices`、`shared` 的现有模块边界保持不变。
@@ -24,7 +25,7 @@
 |---|---|
 | Gitee 仓库 | `softHertz_tool` |
 | GitHub 发布仓库 | `softHertz_tool` |
-| 本地仓库目录 | `softHertz_tool` |
+| 本地仓库目录 | `2-softHertz_tool`（直接作为仓库根） |
 | UI 产品名 | `SoftHertz Tool` |
 | Windows 可执行文件 | `SoftHertz_Tool.exe` |
 | CI Artifact | `SoftHertz_Tool-windows` |
@@ -47,7 +48,7 @@
 ## 3. 目标目录
 
 ```text
-softHertz_tool/
+2-softHertz_tool/
 ├── .github/
 │   └── workflows/
 ├── docs/
@@ -170,7 +171,8 @@ DOC/
 3. 合并到 `master` 并先推送 Gitee。
 4. 将 Gitee 仓库改名为 `softHertz_tool`，随后更新并验证 `origin`。
 5. GitHub 继续只承担发布；代码验证通过后再将仓库改名为 `softHertz_tool` 并更新 `github` remote。
-6. 最后将本地仓库目录改名为 `softHertz_tool`，重建虚拟环境并重新打开工程。
+6. 最后将本地编号目录改名为 `2-softHertz_tool`，去除中间 `softHertz_tool` 目录，
+   重建虚拟环境并重新打开工程。
 
 ## 6. 风险和控制
 

@@ -18,13 +18,24 @@ LOG_DIRECTORY_NAME = "logs"
 
 
 def create_application_settings() -> QSettings:
-    """创建当前产品使用的设置存储。"""
+    """创建当前产品使用的设置存储。
+
+    Returns:
+        绑定 ``SoftHertz/SoftHertz_Tool`` 命名空间的 QSettings 对象。
+    """
 
     return QSettings(SETTINGS_ORGANIZATION, SETTINGS_APPLICATION)
 
 
 def create_legacy_settings() -> QSettings:
-    """打开旧 AFDTR 产品设置；迁移过程只读，不删除旧值。"""
+    """打开旧 AFDTR 产品设置。
+
+    Returns:
+        绑定旧 ``SoftHertz/AFDTR_Tool`` 命名空间的 QSettings 对象。
+
+    Notes:
+        调用方只读取迁移所需值，不删除或覆盖旧设置。
+    """
 
     return QSettings(SETTINGS_ORGANIZATION, LEGACY_SETTINGS_APPLICATION)
 
@@ -36,7 +47,16 @@ def load_device_model(
 ) -> str:
     """读取设备工作区；当前设置缺失时从旧命名空间迁移一次。
 
-    当前命名空间具有最高优先级。旧值仅复制到当前命名空间，原设置保持不变。
+    Args:
+        settings: 当前产品设置。
+        legacy_settings: 可选旧设置；未提供时按旧命名空间创建。
+        default: 当前和旧设置均无有效值时使用的 Workspace key。
+
+    Returns:
+        应当激活的稳定 Workspace key。
+
+    Notes:
+        当前命名空间具有最高优先级。旧值仅复制到当前命名空间，原设置保持不变。
     """
 
     if settings.contains(DEVICE_MODEL_KEY):
@@ -55,7 +75,14 @@ def load_device_model(
 
 
 def default_log_directory(documents_directory: Path) -> Path:
-    """返回当前产品位于系统文档目录下的默认日志目录。"""
+    """构造当前产品位于系统文档目录下的默认日志路径。
+
+    Args:
+        documents_directory: 操作系统或调用方提供的文档根目录。
+
+    Returns:
+        ``<文档>/SoftHertz/SoftHertz_Tool/logs`` 路径；函数不创建目录。
+    """
 
     return (
         Path(documents_directory)

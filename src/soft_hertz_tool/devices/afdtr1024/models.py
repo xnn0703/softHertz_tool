@@ -15,6 +15,11 @@ class DeviceVariant(str, Enum):
 
     @classmethod
     def coerce(cls, value: Union["DeviceVariant", str]) -> "DeviceVariant":
+        """将枚举或不区分大小写的 TX/RX 文本规范为设备变体。
+
+        Raises:
+            ValueError: ``value`` 不是支持的 AFDT1024/AFDR1024 变体。
+        """
         if isinstance(value, cls):
             return value
         try:
@@ -24,6 +29,7 @@ class DeviceVariant(str, Enum):
 
     @property
     def is_tx(self) -> bool:
+        """当变体为 AFDT1024 发射端时返回 ``True``。"""
         return self is DeviceVariant.TX
 
     @property

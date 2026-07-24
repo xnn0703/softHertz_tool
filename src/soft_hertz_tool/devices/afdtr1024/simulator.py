@@ -81,6 +81,7 @@ class AFDTR1024Simulator:
         variant: Union[DeviceVariant, str],
         ids: Optional[Iterable[int]] = None,
     ):
+        """创建指定 AFDT1024/AFDR1024 变体及合法子阵 ID 集合的纯模拟内核。"""
         self.variant = DeviceVariant.coerce(variant)
         values = list(ids) if ids is not None else [1]
         self.ids = self._normalize_ids(values)
@@ -88,6 +89,11 @@ class AFDTR1024Simulator:
 
     @staticmethod
     def _normalize_ids(values: Iterable[int]) -> list[int]:
+        """校验、去重并保留 0x01~0x7F 的模拟子阵 ID。
+
+        Raises:
+            ValueError: ID 超出范围或结果为空。
+        """
         result: list[int] = []
         for value in values:
             subarray_id = int(value)
@@ -100,6 +106,7 @@ class AFDTR1024Simulator:
         return result
 
     def state_for(self, subarray_id: int) -> SimulatorState:
+        """返回指定子阵的可变模拟状态，首次访问时创建默认状态。"""
         return self.states.setdefault(int(subarray_id), SimulatorState())
 
     def handle_frame(self, frame: bytes) -> list[bytes]:
@@ -115,6 +122,7 @@ class AFDTR1024Simulator:
         payload = parsed["payload"]
 
         if target == 0:
+            # ID=0 是广播配置；查询不产生广播响应，以免伪造多设备冲突。
             if addr in self._config_addresses:
                 for current_id in self.ids:
                     self._record_config(current_id, addr, payload)
@@ -135,17 +143,21 @@ class AFDTR1024Simulator:
 
     @property
     def _config_addresses(self) -> set[int]:
+        """返回当前 AFDT1024/AFDR1024 变体可接受的配置地址集合。"""
         return protocol.TX_CONFIG_ADDRS if self.variant.is_tx else protocol.RX_CONFIG_ADDRS
 
     @property
     def _status_query_address(self) -> int:
+        """返回当前变体的查询 1 响应地址。"""
         return protocol.ADDR_STATUS_QUERY if self.variant.is_tx else protocol.ADDR_RX_STATUS_QUERY
 
     @property
     def _beam_query_address(self) -> int:
+        """返回当前变体的查询 2 响应地址。"""
         return protocol.ADDR_TX_BEAM_QUERY if self.variant.is_tx else protocol.ADDR_RX_BEAM_QUERY
 
     def _record_config(self, subarray_id: int, addr: int, payload: bytes) -> None:
+        """把有效配置载荷写入子阵状态；长度不足或非法波束载荷保持原状态。"""
         state = self.state_for(subarray_id)
         if addr in (protocol.ADDR_TX_BEAM, protocol.ADDR_RX_BEAM):
             try:
@@ -181,6 +193,7 @@ class AFDTR1024Simulator:
         )
 
     def build_beam_query_response(self, subarray_id: int) -> bytes:
+        """按当前子阵状态构造查询 2 响应。"""
         state = self.state_for(subarray_id)
         return protocol.build_beam_query_response_frame(
             int(subarray_id) & 0x7F,
@@ -190,7 +203,10 @@ class AFDTR1024Simulator:
 
 
 class TXSimulator(AFDTR1024Simulator):
+    """固定为 AFDT1024 变体的旧接口兼容模拟器。"""
+
     def __init__(self, port=None, ids: Optional[Iterable[int]] = None):
+        """创建 AFDT1024 模拟器；首参非字符串时兼容旧的 ID 传参方式。"""
         if ids is None and port is not None and not isinstance(port, str):
             ids, port = port, None
         self.port = port
@@ -198,13 +214,17 @@ class TXSimulator(AFDTR1024Simulator):
 
 
 class RXSimulator(AFDTR1024Simulator):
+    """固定为 AFDR1024 变体的旧接口兼容模拟器。"""
+
     def __init__(self, port=None, ids: Optional[Iterable[int]] = None):
+        """创建 AFDR1024 模拟器；首参非字符串时兼容旧的 ID 传参方式。"""
         if ids is None and port is not None and not isinstance(port, str):
             ids, port = port, None
         self.port = port
         super().__init__(DeviceVariant.RX, ids)
 
     def build_rx_status_response(self, subarray_id: int) -> bytes:
+        """兼容旧调用名，返回 AFDR1024 查询 1 响应。"""
         return self.build_status_response(subarray_id)
 
 
@@ -218,6 +238,14 @@ class AFDTR1024SerialSimulator:
         ids: Optional[Iterable[int]] = None,
         baudrate: int = 460800,
     ):
+        """创建串口模拟器。
+
+        Args:
+            port: 实体或虚拟串口名。
+            variant: AFDT1024/AFDR1024 变体。
+            ids: 可响应的子阵 ID。
+            baudrate: 串口波特率。
+        """
         self.port = port
         self.baudrate = int(baudrate)
         self.engine = AFDTR1024Simulator(variant, ids)
@@ -226,6 +254,7 @@ class AFDTR1024SerialSimulator:
         self.serial = None
 
     def start(self) -> None:
+        """阻塞运行串口收发循环，直到 ``stop`` 或串口关闭。"""
         import serial
 
         self.serial = serial.Serial(self.port, self.baudrate, timeout=0.01)
@@ -248,6 +277,9 @@ class AFDTR1024SerialSimulator:
                 self.serial.close()
 
     def stop(self) -> None:
+        """请求停止模拟器并关闭串口，以解除另一线程的读等待。"""
+
+        # 主循环与 stop() 可能并发；重复 close 受 is_open 保护，最终关闭仍在循环 finally 收敛。
         self.running = False
         if self.serial and self.serial.is_open:
             self.serial.close()
@@ -257,6 +289,7 @@ SerialSimulator = AFDTR1024SerialSimulator
 
 
 def main() -> None:
+    """启动一对 AFDT1024/AFDR1024 串口模拟器，供本地联调使用。"""
     parser = argparse.ArgumentParser(description="AFDT1024/AFDR1024 serial simulator")
     parser.add_argument("tx_port", nargs="?", default="COM10")
     parser.add_argument("rx_port", nargs="?", default="COM11")

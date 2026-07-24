@@ -40,19 +40,25 @@ tests/
 │   └── test_afd01_qs.py
 ├── shared/
 │   ├── test_transport.py
-│   └── test_observability.py
+│   ├── test_observability.py
+│   └── test_resources.py
 └── integration/
+    ├── test_application_identity.py
     ├── test_workspace_registry.py
     ├── test_dependency_boundaries.py
+    ├── test_documentation_contract.py
+    ├── test_entrypoint_smoke.py
+    ├── test_entrypoints_and_packaging.py
     └── test_repository_layout.py
 ```
 
 覆盖关系：
 
-- 串口改进相关的 50 个用例名称均位于正式测试套件；
-- QS 的 11 类关键语义由 `test_afd01_qs.py` 和 `test_observability.py` 覆盖；
-- QS 语义包括帧构造/A0 解码、上报频率、流恢复、阵列配置、波束缩放、模拟器 100 Hz、日志轮转、监视器行数、阵列网格、单请求约束和 UI 超时；
-- 集成测试补充产品配置、Workspace 切换/退出、依赖方向和仓库结构；
+- 设备测试覆盖协议构帧/解析、流恢复、Driver、Panel、模拟器和设备业务回归；
+- QS 测试覆盖构帧、A0/A1 解码、上报频率、流恢复、阵列配置、模拟器 100 Hz、日志监视、
+  阵列网格、单请求约束和 UI 超时；
+- 集成测试补充产品配置、模块与 PyInstaller 入口冒烟、打包参数/清理范围、生产代码 docstring、
+  Workspace 切换/退出、依赖方向和仓库结构；
 - 不维护第二套重复的兼容测试入口。
 
 正式验证命令：
@@ -65,6 +71,8 @@ git diff --check
 ```
 
 每次发布应记录实际 collected、passed、failed、skipped 数量，不在长期文档中用旧数量替代本次结果。
+当前 `0.0.0` 是开发包版本；在版本单一来源落地前，tag、Release 和包元数据必须分别记录，
+不能据 tag 名推断包版本。
 
 ## 4. 设备软件验收
 

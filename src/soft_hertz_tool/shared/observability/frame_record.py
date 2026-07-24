@@ -20,6 +20,13 @@ class FrameRecord:
     timestamp: datetime = field(default_factory=datetime.now)
 
     def to_line(self) -> str:
+        """序列化为监视器和日志共用的单行文本。
+
+        Returns:
+            包含毫秒时间、公开型号、端口、方向、命令、十六进制原始帧、
+            级别和解析结果的稳定可读行，不包含末尾换行符。
+        """
+
         time_text = self.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         raw_text = self.raw.hex(" ").upper() or "-"
         return (
