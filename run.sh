@@ -7,7 +7,6 @@ VENV_DIR="$ROOT_DIR/.venv"
 FORCE_UPDATE=0
 MODE="app"
 MODE_SELECTED=0
-FORWARD_ARGS=()
 
 usage() {
   cat <<'EOF'
@@ -50,14 +49,12 @@ while (($#)); do
       ;;
     --help|-h)
       if ((MODE_SELECTED)); then
-        FORWARD_ARGS=("$@")
         break
       fi
       usage
       exit 0
       ;;
     *)
-      FORWARD_ARGS=("$@")
       break
       ;;
   esac
@@ -85,6 +82,14 @@ fi
 
 VENV_PYTHON="$VENV_DIR/bin/python"
 STAMP="$VENV_DIR/.deps_installed"
+
+run_python_module() {
+  # 输入为模块名及其参数；成功时以 Python 进程替换当前脚本，不返回输出。
+  local module="$1"
+  shift
+  exec "$VENV_PYTHON" -m "$module" "$@"
+}
+
 if ((FORCE_UPDATE)) || [[ ! -f "$STAMP" ]]; then
   echo "▶ 从仓库根目录安装依赖和入口..."
   "$VENV_PYTHON" -m pip install --upgrade pip
@@ -99,14 +104,14 @@ cd "$ROOT_DIR"
 case "$MODE" in
   app)
     echo "▶ 启动 SoftHertz Tool..."
-    exec "$VENV_PYTHON" -m soft_hertz_tool "${FORWARD_ARGS[@]}"
+    run_python_module soft_hertz_tool "$@"
     ;;
   afdtr-sim)
     echo "▶ 启动 AFDT1024/AFDR1024 模拟器（Ctrl+C 退出）..."
-    exec "$VENV_PYTHON" -m soft_hertz_tool.devices.afdtr1024.simulator "${FORWARD_ARGS[@]}"
+    run_python_module soft_hertz_tool.devices.afdtr1024.simulator "$@"
     ;;
   qs-sim)
     echo "▶ 启动 AFD01_QS 模拟器（Ctrl+C 退出）..."
-    exec "$VENV_PYTHON" -m soft_hertz_tool.devices.afd01_qs.simulator "${FORWARD_ARGS[@]}"
+    run_python_module soft_hertz_tool.devices.afd01_qs.simulator "$@"
     ;;
 esac
