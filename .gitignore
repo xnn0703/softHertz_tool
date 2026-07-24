@@ -4,6 +4,11 @@ __pycache__/
 *$py.class
 *.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # ===== 虚拟环境 =====
 .venv/
@@ -16,6 +21,9 @@ dist/
 *.spec
 *.manifest
 version_info.txt
+*.app/
+*.dmg
+*.pkg
 
 # ===== 可执行 / 压缩产物 =====
 *.exe
@@ -25,6 +33,7 @@ version_info.txt
 *.log
 log.txt
 *serial_log.txt
+logs/
 
 # ===== 操作系统 / 编辑器 =====
 .DS_Store
