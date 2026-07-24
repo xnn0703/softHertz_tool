@@ -24,16 +24,21 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install PySide6 pyserial pyinstaller
+        run: pip install -e "KauDC004A_TestTool[dev]"
+
+      - name: Run regression tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: >-
+          python -m pytest
+          KauDC004A_TestTool/tests
+          KauDC004A_TestTool/code/test_serial_improved.py
+          KauDC004A_TestTool/code/test_qs_features.py
+          -q
 
       - name: Build EXE (PyInstaller)
         working-directory: KauDC004A_TestTool/code
-        run: >
-          pyinstaller --noconfirm --onefile --windowed
-          --name SoftHertz_AFDTR_Tool
-          --icon soft_hertz_logo_deepspace_blue_512.ico
-          --add-data "soft_hertz_logo_deepspace_blue_512.png;."
-          main_qt6.py
+        run: python build_spec.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

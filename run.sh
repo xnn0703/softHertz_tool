@@ -12,6 +12,8 @@ set -euo pipefail
 # 仓库根目录 = 脚本所在目录
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODE_DIR="$ROOT_DIR/KauDC004A_TestTool/code"
+APP_DIR="$ROOT_DIR/KauDC004A_TestTool"
+SRC_DIR="$APP_DIR/src"
 REQ_FILE="$ROOT_DIR/KauDC004A_TestTool/requirements.txt"
 VENV_DIR="$ROOT_DIR/.venv"
 
@@ -31,12 +33,14 @@ for arg in "$@"; do
   esac
 done
 
-# 确认在正确的分支 / 目录（dev_kaudc004a）
-if [ ! -f "$CODE_DIR/main_qt6.py" ]; then
-  echo "✗ 找不到 $CODE_DIR/main_qt6.py" >&2
-  echo "  本脚本针对 dev_kaudc004a 分支，请确认已切换：git checkout dev_kaudc004a" >&2
+# 确认在正确的源码目录
+if [ ! -f "$SRC_DIR/soft_hertz_tool/__main__.py" ]; then
+  echo "✗ 找不到 $SRC_DIR/soft_hertz_tool/__main__.py" >&2
+  echo "  请确认仓库完整且当前代码线包含 src/soft_hertz_tool" >&2
   exit 1
 fi
+
+export PYTHONPATH="$SRC_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
 # 选择 Python 解释器
 if command -v python3 >/dev/null 2>&1; then
@@ -68,6 +72,14 @@ if [ "$FORCE_UPDATE" = "1" ] || [ ! -f "$STAMP" ]; then
   touch "$STAMP"
 fi
 
+# 确保正式包及三个 console script 已注册；已有旧 venv 时也会自动补装。
+if [ ! -x "$VENV_DIR/bin/soft-hertz-tool" ] \
+  || [ ! -x "$VENV_DIR/bin/soft-hertz-afdtr-sim" ] \
+  || [ ! -x "$VENV_DIR/bin/soft-hertz-qs-sim" ]; then
+  echo "▶ 注册 SoftHertz 可编辑包入口..."
+  python -m pip install --no-deps -e "$APP_DIR"
+fi
+
 # 启动
 cd "$CODE_DIR"
 if [ "$RUN_SIM" = "1" ]; then
@@ -75,5 +87,6 @@ if [ "$RUN_SIM" = "1" ]; then
   exec python device_simulator.py
 else
   echo "▶ 启动上位机 SoftHertz_AFDTR_Tool..."
-  exec python main_qt6.py
+  cd "$ROOT_DIR"
+  exec python -m soft_hertz_tool
 fi

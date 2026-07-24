@@ -1,91 +1,70 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本文件说明当前仓库中 PySide6 上位机的开发入口与架构边界。项目功能、环境、协议、测试、打包和 TODO 的完整说明以根目录 `README.md` 为准。
 
-> **分支说明**：本文件针对 **`dev_kaudc004a`** 分支。该分支与 `master` 是**两套完全不同的代码**——`master` 是 `softHertz_upper/code/` 下的多设备插件式 PyQt5 工具，`dev_kaudc004a` 则是 `KauDC004A_TestTool/code/` 下重写的单文件 PySide6 工具。本文件只描述后者，切回 master 前需另行了解其结构。
+## 当前代码线
 
-## 项目简介
-
-KauDC004A_TestTool（打包后名为 **SoftHertz_AFDTR_Tool**）：一个 PySide6 GUI 串口调试工具，主窗口里**三个设备面板并排**，各自独立连接串口、互不共享状态：
-
-- **KaUDC004A**：Ka 波段上下变频器（本振/衰减/温度/版本）
-- **Ka1024_TX**：AFDT1024 发射子阵（波束/阵列使能/推动 PA/极化/状态）
-- **Ka1024_RX**：AFDR1024 接收子阵（波束/阵列使能/极化/状态，无 PA）
-
-源码全部在 `KauDC004A_TestTool/code/`，是扁平模块（无包结构），必须在该目录下运行。
+- 发布名称：`SoftHertz_AFDTR_Tool`。
+- 设备工作区：`AFDTR`、`AFD01_QS`。
+- 真实硬件型号分别为 **AFDT1024**（1024 发射阵列）和 **AFDR1024**（1024 接收阵列）；界面、日志和文档必须分别使用这两个型号。
+- `AFDTR` 是工作区和产品包名，不是硬件型号；`devices/afdtr1024` 目录及 `AFDTR1024*` 类名仅是 AFDT1024/AFDR1024 的内部共用实现命名。
+- 正式实现位于 `KauDC004A_TestTool/src/soft_hertz_tool`。
+- `KauDC004A_TestTool/code` 仅保留旧启动/导入兼容层和本地打包脚本，不得继续承载新业务实现。
 
 ## 常用命令
 
-> 一键运行（自动建 venv + 装依赖 + 启动）：在**仓库根目录**执行 `./run.sh`（Windows `run.bat`）；`--sim` 启动设备模拟器，`--update` 强制重装依赖。
+在仓库根目录执行：
 
 ```bash
+./run.sh
+
+python -m pip install -e "KauDC004A_TestTool[dev]"
+QT_QPA_PLATFORM=offscreen python -m pytest KauDC004A_TestTool/tests -q
+QT_QPA_PLATFORM=offscreen python -m pytest \
+  KauDC004A_TestTool/code/test_serial_improved.py \
+  KauDC004A_TestTool/code/test_qs_features.py -q
+
 cd KauDC004A_TestTool/code
-
-# 运行上位机
-python main_qt6.py
-
-# 运行设备模拟器（用于无硬件时联调；默认 TX=COM10, RX=COM11，可传参覆盖）
-python device_simulator.py [tx_port] [rx_port]
-
-# 运行测试（pytest 用例）
-pytest test_serial_improved.py
-# 或：python -m pytest test_serial_improved.py -v
-# 跑单个用例：pytest test_serial_improved.py::TestProtocolParsing::test_aa55_frame_build_and_parse
-
-# 安装依赖
-pip install -r ../requirements.txt   # PySide6>=6.5, pyserial>=3.5, PyInstaller>=5.13
-
-# 打包为单文件 exe（产物：dist/SoftHertz_AFDTR_Tool.exe）
 python build_spec.py
 ```
 
-## 架构
+模拟器入口：
 
-整个程序约 2600 行，核心是三层：**UI 面板（主线程）↔ Qt 信号 ↔ 串口 Worker（QThread）↔ 协议模块（纯函数）**。
+```bash
+soft-hertz-afdtr-sim <TX端口> <RX端口>
+soft-hertz-qs-sim <QS端口> --baudrate 921600
+```
 
-### `main_qt6.py`（全部 UI + 线程）
-- **`MainWindow`**：把 `KaUDCPanel` / `TXPanel` / `RXPanel` 三个面板横排，关闭时逐个 `_disconnect()`。
-- **`DevicePanel`**（基类）：封装串口设置区、端口下拉（2s 定时刷新）、连接/断开按钮。子类必须实现 `_setup_ui()` / `_do_connect()` / `_on_status()`。
-- **三个面板子类**：每个面板创建自己的 Worker、连接信号、构建命令帧并 `worker.send_frame()`。TX 与 RX 面板结构高度相似但协议地址/状态解析不同。
-- **两个 Worker 线程类**（近乎重复，刻意分开）：
-  - **`SerialWorker`**：服务 TX/RX，解析 AFDT1024 协议（"PSA" 帧头）。`device_type` 为 `"TX"`/`"RX"`。
-  - **`KaUDCWorker`**：服务 KaUDC004A，解析 0xAA55 定长帧。
-  - 两者都用 `pyserial`（非 QSerialPort）在 `run()` 里轮询 `in_waiting` 读取，自带 `buffer` 做粘包拆帧，通过 `log_signal` / `status_signal` / `response_signal` 把结果发回 UI 线程。
+## 架构边界
 
-> **为什么用 pyserial 而非 QSerialPort**：`SerialWorker` 注释明确说明 `QSerialPort` 在 `QThread` 中有线程亲和性问题，故改用 pyserial。注意 `DEV_LOG.md` / `plan.md` 里"迁移到 QtSerialPort"的描述是**过时计划**，与现状不符；`.sisyphus/plans/kau_testtool_analysis.md` 提到的 Tkinter 更是重写前的旧状态。**以源码为准**。
+```text
+app/registry -> workspaces -> devices/<device> -> shared
+                                panel -> driver -> protocol/stream
+```
 
-### `protocol.py`（KaUDC004A 协议，纯函数）
-- 定长 **12 字节帧**：帧头 `AA 55 0C 00` + 6 字节 payload + 2 字节 **CRC16-CCITT**（poly `0x1021`，init `0xFFFF`，big-endian，覆盖 byte0~9）。
-- 命令码常量：`0x0B` 版本、`0x0C` 温度、`0x0E`/`0x12` 收/发本振、`0x13` 本振查询、`0x14`/`0x15` 收发衰减、`0x16` 衰减查询。
-- 衰减范围 0~300（值/10 = dB）。
+- `app` 只负责应用、静态 workspace registry、工作区切换和统一生命周期。
+- `workspaces` 只组合设备页面，并实现 `activate()` / `deactivate()` / `shutdown()`。
+- 每个 `devices/<device>` 目录独立维护协议、流式拆帧、Driver、Panel；需要时增加模型、控件和模拟器。
+- `shared` 提供串口线程、端口扫描、报文记录、异步日志、资源定位和共享控件，不得反向导入具体设备。
+- Panel 只收集输入和展示状态，通过 Driver 语义接口操作设备，不手工拼帧或解析帧。
+- Driver 独占串口会话并分派协议事件；协议模块保持纯函数，不依赖 Qt 控件或串口。
+- 模拟器复用正式协议实现，不能维护第二套协议常量或校验算法。
 
-### `afdt1024_protocol.py`（AFDT1024/AFDR1024 协议 **V2.2**，纯函数）
-- **变长帧**：帧头 `"PSA"`(`50 53 41`) + device_id(1) + length(1) + payload + addr(1) + **求和校验**(`sum & 0xFF`，**不是 CRC**；除 CheckSum 外全字段求和)。
-- **V2.1：所有返回帧末尾都是指令号(ADDR)**。`parse_response(frame)` 返回 `{device_id, addr, payload}`，统一取末尾字节为 addr：`addr ∈ CONFIG_ECHO_ADDRS` → 配置 echo；`addr==0x5C` → TX 状态返回；`addr==0x9C` → RX 状态返回（见 `STATUS_RETURN_ADDRS`）。查询返回数据长度 TX=7 / RX=6（V2.1 在末尾**新增了指令号字节**）。
-- 配置命令地址：TX `0x50/0x51/0x53/0x56/0x57`、RX `0x90/0x91/0x93/0x97`、ID更新 `0x20`。
-- **查询指令**：查询1(状态) `0x5C`(TX)/`0x9C`(RX) 返回电压/温度/PA；**V2.2 查询2(波束参数)** `0x5F`(TX)/`0x9F`(RX) 返回 POL/EN_ROW/FREQ/BeamV/BeamH（`parse_beam_query_response`，返回帧由 `BEAM_QUERY_RETURN_ADDRS` 标识）。
-- 波束帧内布局 `FREQ | BeamV[11:0] | BeamH[11:0]`；`build_*_beam_frame` 参数顺序**已统一**为 `(device_id, freq, beam_h, beam_v)`。
-- `calculate_beam_values(theta, phi, freq, is_tx)` → `(beam_h, beam_v)`：`AngleToCode_12bit(180×f/f0×sinθ×cosφ 或 sinφ)`，`round(ang×2048/180)`、负数 +4096、mod 4096；f0 TX=30000 / RX=20270 MHz。**freq 必须用量化到 50MHz 步进的实际频率**(`27500/17700 + 50×freq_num`)，否则设置↔回读角度有系统偏差（`_on_set_beam` 已处理）。`beam_code_to_angle` 为其反算（码值→θ/φ，UI 现仅显示 BeamV/BeamH 码值）。
-- **不兼容旧协议**（含历史 RX 校验和 bug，已移除）。
+## 并发与生命周期
 
-### `device_simulator.py`（TX/RX 设备模拟器，支持多子阵）
-独立脚本，TX/RX 各监听一个串口。每个模拟器持有一组子阵 ID（`ids=`，默认 `main()` 里 `[1,2,3]`）：按收到帧的目标 ID 路由——`ID=0` 广播不返回；`目标&0x7F ∈ ids` 才回复；状态电压/温度随 ID 变化以便验证多行。配置命令回 echo，状态查询回 V2.1 状态帧（正常校验和）。
+- pyserial 对象只能由 `SerialThread.run()` 所在线程打开、读写和关闭；UI 通过有界发送队列提交字节，写入必须设置有限超时。
+- Qt 控件只能在主线程更新；高频数据必须限频或批量刷新。
+- 型号切换调用隐藏 workspace 的 `deactivate()`，断开串口并暂停页面定时器；进入前台后由 `activate()` 恢复。
+- 只有 Driver 线程确认退出后才能销毁对象；快速重连时用连接代际过滤旧会话的延迟信号。
+- 程序退出调用所有 workspace 的幂等 `shutdown()`；任一串口线程停止失败时取消关闭。
+- 原始 TX、RX、DROP 事件统一转换为 `FrameRecord`，进入全局监视器和异步日志链路。
 
-## 关键约定与陷阱
+## 开发流程
 
-- **三面板完全独立**：没有共享的串口/状态管理器，每个面板一个 Worker、一个串口连接。新增设备就是再写一个 `DevicePanel` 子类 + 一个 Worker + 在 `MainWindow` 里 `addWidget`。
-- **两套协议、两种校验**：KaUDC004A = CRC16-CCITT（big-endian）；AFDT1024 = 字节求和。改协议时别用错校验算法。
-- **AFDT1024 V2.1 一律以末尾指令号(ADDR)分派**：`SerialWorker._process_frame` 按 `parse_response` 返回的 `addr` 分流——`0x5C→parse_status_response`(TX)、`0x9C→parse_rx_status_response`(RX)、其余已知 ADDR→配置 echo。状态 `status_info` 会带上 `device_id` 上抛，供多子阵按 ID 路由到表格行。
-- **（历史）RX 校验和 bug 已在 V2.1 移除**：旧 RX 设备算校验和漏 mcu_ver 字节，曾用 `has_rx_status_bug` 兼容；V2.1 明确全字段求和，已删除该兼容逻辑，模拟器也改为正常校验和。
-- **多子阵（TX/RX 一条总线挂多个子阵，ID 区分）**：`DevicePanel` 基类提供子阵管理——`_parse_id_list()` 解析 ID 列表；`_get_target_device_id()` 按「目标下拉(全部=广播 ID=0 / 指定 ID)」+「仅本子阵(+128)」算配置 device_id；状态用按 ID 一行的表格，`_update_status_row()` 按回复帧 `device_id & 0x7F` 路由；`_on_query_status()` 对每个 ID 发查询1(状态)+查询2(波束参数)，`_update_status_row` 按列名增量合并到同一行。`_gen_subarray_ids(cols, n)` 按协议拼接编号（左列 `0x01~0x0N`、右列 `0x11~0x1N`）一键生成 ID。三种 ID 模式：`0`=广播不返回 / 实际ID=对应返回 / `+128`=仅对应返回。
-- **波束 12bit 打包**：帧内 `FREQ | BeamV[11:0] | BeamH[11:0]`（BeamV 高位、BeamH 低位）。`build_*_beam_frame` 参数顺序已统一 `(device_id, freq, beam_h, beam_v)`。
-- **温度解码当前返回原始字节**：`protocol.py` 的 `decode_temperature` 和 `main_qt6.py` 里 0x0C 分支的"`0x80`=0°C 偏移"逻辑都被**注释掉了**（最近提交 `feat: 更新协议文档和温度解码逻辑` 有意为之）。改温度显示前先确认这是否仍是预期。
-- **状态字段换算**：AFDT1024 状态里 `sys_vcc = 原值 × 0.1` V，`sys_temp = 原值 − 80` ℃。
-- **UI 卡顿历史问题**：早期"快速点按钮 → 多帧回复 → `log_signal.emit` 泛滥 → UI 冻结"，详见 `UI_FREEZE_ANALYSIS.md`。新增高频日志/信号时注意别重蹈覆辙。
+1. 功能开发前建立 `docs/<feature>/plan.md` 和 `acceptance.md`。
+2. 实现期间维护 `development.md`，记录设计决策、验证结果和未闭环的硬件/平台边界。
+3. 协议变更必须先核对受控原件，并同步修改协议、模拟器、测试和文档。
+4. 完成后运行正式包与兼容入口全量回归、离屏 UI 冒烟和与风险匹配的打包/硬件验证。
+5. 模拟器和 Host 测试不能替代 Windows 产物或真实设备验收。
 
-## 文档地图
-
-- `DOC/AFDT1024_TX_Protocol.md`、`DOC/AFDR1024_RX_Protocol.md`：TX/RX 协议规范（**已更新到 V2.2**），对应 PDF 原件 `…控制接口协议_V2.2_20260612.pdf`。改协议代码时的权威依据。
-- `KauDC004A_TestTool/PROTOCOL_V2.1_MIGRATION_PLAN.md`、`PROTOCOL_V2.2_PLAN.md`、`MULTI_SUBARRAY_PLAN.md`：各轮协议适配与多子阵改造的计划/验收。
-- `KauDC004A_TestTool/DEV_LOG.md`、`plan.md`、`PROTOCOL_FIX_PLAN.md`、`UI_FREEZE_ANALYSIS.md`：开发日志与历次修复方案。**注意其中关于 QtSerialPort/Tkinter 的描述已过时**，仅作历史参考。
-- `DOC/上位调试软件需求.txt`、`DOC/修改记录.txt`：需求与版本变更记录。
+不要主动提交 Git。提交前不得包含虚拟环境、缓存、日志、`build/`、`dist/`、生成的 spec 或可执行文件。

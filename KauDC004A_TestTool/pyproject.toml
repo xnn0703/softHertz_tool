@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "soft-hertz-tool"
+version = "0.0.0"
+description = "SoftHertz AFDTR/AFD01_QS serial debug tool"
+readme = {text = "SoftHertz AFDTR/AFD01_QS serial debug tool", content-type = "text/plain"}
+requires-python = ">=3.9"
+dependencies = [
+    "PySide6>=6.5.0",
+    "pyserial>=3.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "PyInstaller>=5.13.0",
+]
+
+[project.scripts]
+soft-hertz-tool = "soft_hertz_tool.__main__:main"
+soft-hertz-afdtr-sim = "soft_hertz_tool.devices.afdtr1024.simulator:main"
+soft-hertz-qs-sim = "soft_hertz_tool.devices.afd01_qs.simulator:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"soft_hertz_tool.resources" = ["*.png", "*.ico"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
