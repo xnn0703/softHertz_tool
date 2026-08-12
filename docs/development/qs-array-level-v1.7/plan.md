@@ -33,3 +33,5 @@
   档位确认和超时。
 - 运行完整 `pytest`、`compileall` 和 Qt offscreen 冒烟。
 - 运行 30 秒 QS 模拟器链路，确认 A0 频率和报文落盘不回退。
+- 在虚拟时钟下验证 100 Hz 调度和无突发补帧，避免把 Windows CI 调度抖动误判为协议回退。
+- 通过 GitHub Actions 的 Python 3.9/3.11 测试、Windows EXE 构建和产物冒烟。

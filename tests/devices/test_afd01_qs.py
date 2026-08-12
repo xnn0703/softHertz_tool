@@ -269,9 +269,10 @@ def test_driver_tx_log_describes_array_level_and_keeps_raw_frame(monkeypatch):
 
 
 class FakeSerial:
-    def __init__(self):
+    def __init__(self, monotonic=time.monotonic):
         self.writes = []
         self.input = bytearray()
+        self.monotonic = monotonic
 
     @property
     def in_waiting(self):
@@ -283,12 +284,32 @@ class FakeSerial:
         return data
 
     def write(self, data):
-        self.writes.append((time.monotonic(), bytes(data)))
+        self.writes.append((self.monotonic(), bytes(data)))
         return len(data)
 
 
-def test_simulator_applies_array_status_and_emits_100hz_without_burst():
-    serial = FakeSerial()
+def test_simulator_applies_array_status_and_emits_100hz_without_burst(monkeypatch):
+    now = 0.0
+
+    def monotonic():
+        """返回当前受控单调时钟值。"""
+
+        return now
+
+    def sleep(duration):
+        """按请求时长推进受控时钟，零时长也保证循环前进。"""
+
+        nonlocal now
+        now += max(duration, 0.0001)
+
+    monkeypatch.setattr(
+        "soft_hertz_tool.devices.afd01_qs.simulator.time.monotonic", monotonic
+    )
+    monkeypatch.setattr(
+        "soft_hertz_tool.devices.afd01_qs.simulator.time.sleep", sleep
+    )
+
+    serial = FakeSerial(monotonic)
     simulator = QSDeviceSimulator(serial)
     assert simulator.tx_level == 5
     assert simulator.rx_level == 5
@@ -312,9 +333,9 @@ def test_simulator_applies_array_status_and_emits_100hz_without_burst():
     serial.writes.clear()
     simulator.run(duration=0.31)
     a0_writes = [(stamp, data) for stamp, data in serial.writes if data[1] == 0xA0]
-    assert 29 <= len(a0_writes) <= 33
+    assert len(a0_writes) == 31
     intervals = [right[0] - left[0] for left, right in zip(a0_writes, a0_writes[1:])]
-    assert intervals and min(intervals) > 0.004
+    assert intervals and all(interval == pytest.approx(0.01) for interval in intervals)
 
 
 def test_array_grid_displays_16x16_customer_subarray_and_colors(qt_app):

@@ -20,6 +20,8 @@
 - [x] 模拟器对有效查询/设置返回两字段 A1；非法设置不修改当前档位。
 - [x] 3 秒请求超时、请求未入队和旧连接回调保护保持有效。
 - [x] 本轮完整 pytest、compileall、Qt offscreen 冒烟和 `git diff --check` 通过。
+- [x] 100 Hz 调度使用受控虚拟时钟验证，不依赖 Windows runner 的短时调度精度。
+- [x] Python 约束文件仅在依赖安装步骤生效，不影响 setup-python 首次安装解释器。
 
 ## 主机验证证据
 

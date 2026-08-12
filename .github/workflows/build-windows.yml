@@ -24,8 +24,6 @@ jobs:
             constraints: packaging/constraints-test-py39.txt
           - python-version: '3.11.9'
             constraints: packaging/constraints-windows-py311.txt
-    env:
-      PIP_CONSTRAINT: ${{ matrix.constraints }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,6 +38,8 @@ jobs:
             ${{ matrix.constraints }}
 
       - name: Install dependencies
+        env:
+          PIP_CONSTRAINT: ${{ matrix.constraints }}
         run: python -m pip install --editable ".[dev]"
 
       - name: Run formal tests
@@ -51,8 +51,6 @@ jobs:
     needs: test-python
     runs-on: windows-2022
     timeout-minutes: 20
-    env:
-      PIP_CONSTRAINT: packaging/constraints-windows-py311.txt
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -67,6 +65,8 @@ jobs:
             packaging/constraints-windows-py311.txt
 
       - name: Install dependencies
+        env:
+          PIP_CONSTRAINT: packaging/constraints-windows-py311.txt
         run: python -m pip install --editable ".[dev]"
 
       - name: Run formal tests
