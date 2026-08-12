@@ -9,7 +9,7 @@
 - [x] 0x0B/A1 日志摘要显示档位和客户子阵规模，原始帧保持完整。
 - [x] 单请求、超时、连接代际和工作区切换行为不回退。
 - [x] 完整 pytest、compileall 和 Qt offscreen 冒烟通过。
-- [x] Windows EXE 和真实设备仍明确标记为未验收。
+- [x] Windows CI 构建产物已完成原生 `--smoke`；客户目标机和真实设备仍明确标记为未验收。
 
 ## A1 两字段精简验收
 
@@ -38,8 +38,14 @@
 - `git diff --check`：通过。
 - 已覆盖请求未入队、3 秒超时及旧连接 A1 回调：失败/超时网格转红，旧回调不覆盖新连接状态。
 - 已覆盖 A1 两字段精确长度、两字段日志摘要、旧五字段帧拒绝和非法 0x0B 设置保持当前档位。
+- GitHub Actions `v3.0.1`（run `31583451422`）：Windows Python 3.9/3.11.9
+  正式测试、PyInstaller 构建、打包后 EXE `--smoke`、SHA256、Artifact 和 Release 发布均通过。
+- Release 资产 `SoftHertz_Tool.exe` 为 48,942,774 字节，SHA256 为
+  `530551490c3339a2643c1fbeb5ae21d060ab9bf071524e159754f70e5a36d0da`；校验文件内容与
+  GitHub 服务器记录的 EXE 摘要一致。
 
 ## 未闭环边界
 
-- 未构建或运行 Windows EXE。
+- 尚未在客户目标 Windows 机器完成启动、USB/串口驱动和长期运行验收；当前 Windows 证据来自
+  GitHub Windows Server 2022 runner 的构建与 `--smoke`。
 - 未连接真实 AFD01_QS 设备，未验证 V1.7 档位设置、A1 回读及长期稳定性。
