@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AFD01_QS V1.6 串口模拟器：100 Hz A0 + 0x0B/A1 阵列查询与设置。"""
+"""AFD01_QS V1.7 串口模拟器：100 Hz A0 + 0x0B/A1 档位查询与设置。"""
 
 from __future__ import annotations
 
@@ -7,12 +7,12 @@ import argparse
 import struct
 import time
 
-from soft_hertz_tool.devices.afd01_qs.protocol import build_frame
+from soft_hertz_tool.devices.afd01_qs.protocol import ARRAY_LEVEL_PROFILES, build_frame
 from soft_hertz_tool.devices.afd01_qs.stream import FrameStreamParser
 
 
 class QSDeviceSimulator:
-    """通过串口模拟周期 A0 上报和 0x0B/A1 阵列交互的状态内核。"""
+    """通过串口模拟周期 A0 上报和 0x0B/A1 档位交互的状态内核。"""
     PERIOD_S = 0.01
     MIN_INTERVAL_S = 0.005
 
@@ -24,10 +24,8 @@ class QSDeviceSimulator:
         """
         self.serial = serial_port
         self.parser = FrameStreamParser()
-        self.tx_size = 8
-        self.rx_size = 8
-        self.power_flags = 0x03
-        self.apply_flags = 0x03
+        self.tx_level = 5
+        self.rx_level = 5
         self.started = time.monotonic()
         self.running = False
 
@@ -62,19 +60,13 @@ class QSDeviceSimulator:
         )
         return build_frame(0xA0, payload)
 
-    def _a1_frame(self, result: int = 0) -> bytes:
-        """构建当前 KA256 阵列状态的 A1 回读帧。
-
-        Args:
-            result: A1 结果位图，零表示成功。
+    def _a1_frame(self) -> bytes:
+        """构建当前 TX/RX 有效子阵档位的 A1 回读帧。
 
         Returns:
-            完整 QS A1 帧。
+            载荷只含 TX/RX 当前档位的完整 QS A1 帧。
         """
-        return build_frame(
-            0xA1,
-            bytes([result, self.tx_size, self.rx_size, self.power_flags, self.apply_flags]),
-        )
+        return build_frame(0xA1, bytes([self.tx_level, self.rx_level]))
 
     def process_input(self, data: bytes) -> None:
         """解析输入并对有效 0x0B 查询或设置返回 A1。
@@ -90,25 +82,19 @@ class QSDeviceSimulator:
                 continue
 
             payload = parsed["payload"]
-            result = 0
-            if len(payload) != 3:
-                result |= 0x01
-            else:
-                operation, tx_size, rx_size = payload
-                query_ok = operation == 0 and tx_size == 0 and rx_size == 0
-                set_ok = (
-                    operation == 1
-                    and tx_size in (4, 5, 6, 7, 8, 0xFF)
-                    and rx_size in (4, 5, 6, 7, 8, 0xFF)
-                )
-                if not query_ok and not set_ok:
-                    result |= 0x01
-                elif operation == 1:
-                    if tx_size != 0xFF:
-                        self.tx_size = tx_size
-                    if rx_size != 0xFF:
-                        self.rx_size = rx_size
-            self.serial.write(self._a1_frame(result))
+            operation, tx_level, rx_level = payload
+            set_ok = (
+                operation == 1
+                and (tx_level in ARRAY_LEVEL_PROFILES or tx_level == 0xFF)
+                and (rx_level in ARRAY_LEVEL_PROFILES or rx_level == 0xFF)
+            )
+            if set_ok:
+                if tx_level != 0xFF:
+                    self.tx_level = tx_level
+                if rx_level != 0xFF:
+                    self.rx_level = rx_level
+            # A1 没有结果位：非法请求保持当前档位不变，仍只回读当前 TX/RX 档位。
+            self.serial.write(self._a1_frame())
 
     def run(self, duration: float = 0.0) -> None:
         """运行串口循环并以目标 100 Hz 发送 A0。
@@ -149,7 +135,7 @@ def main() -> None:
     """
     import serial
 
-    parser = argparse.ArgumentParser(description="AFD01_QS V1.6 serial simulator")
+    parser = argparse.ArgumentParser(description="AFD01_QS V1.7 serial simulator")
     parser.add_argument("port", help="串口或 PTY 路径")
     parser.add_argument("--baudrate", type=int, default=921600)
     args = parser.parse_args()

@@ -5,22 +5,21 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGridLayout, QLabel, QWidget
 
-from soft_hertz_tool.devices.afd01_qs.protocol import ARRAY_MASKS
+from soft_hertz_tool.devices.afd01_qs.protocol import get_array_level_profile
 
 
 class ArrayGridWidget(QWidget):
-    """8x8 逻辑芯片网格，行列编号固定为 0~7。"""
+    """16×16 客户有效子阵网格，行列编号固定为 1～16。"""
 
     COLORS = {
         "active": "#4f9dd9",
-        "cached": "#b9d7ea",
         "disabled": "#d6d6d6",
         "pending": "#f2c94c",
         "failed": "#eb5757",
     }
 
     def __init__(self, title: str, parent=None):
-        """创建固定 8×8 KA256 阵列状态网格。
+        """创建固定 16×16 客户子阵状态网格。
 
         Args:
             title: 网格标题，通常为 ``TX`` 或 ``RX``。
@@ -29,40 +28,47 @@ class ArrayGridWidget(QWidget):
         super().__init__(parent)
         self.cells = []
         layout = QGridLayout(self)
-        layout.setSpacing(2)
-        layout.addWidget(QLabel(title), 0, 0, 1, 9, Qt.AlignCenter)
-        for col in range(8):
-            layout.addWidget(QLabel(f"C{col}"), 1, col + 1, alignment=Qt.AlignCenter)
-        for row in range(8):
-            layout.addWidget(QLabel(f"R{row}"), row + 2, 0, alignment=Qt.AlignCenter)
+        layout.setSpacing(1)
+        layout.addWidget(QLabel(title), 0, 0, 1, 17, Qt.AlignCenter)
+        for col in range(16):
+            label = QLabel(f"C{col + 1}")
+            label.setStyleSheet("font-size:7pt;")
+            layout.addWidget(label, 1, col + 1, alignment=Qt.AlignCenter)
+        for row in range(16):
+            row_label = QLabel(f"R{row + 1}")
+            row_label.setStyleSheet("font-size:7pt;")
+            layout.addWidget(row_label, row + 2, 0, alignment=Qt.AlignCenter)
             row_cells = []
-            for col in range(8):
-                cell = QLabel(f"{row},{col}")
+            for col in range(16):
+                cell = QLabel()
                 cell.setAlignment(Qt.AlignCenter)
-                cell.setFixedSize(38, 26)
+                cell.setFixedSize(19, 16)
+                cell.setToolTip(f"R{row + 1}, C{col + 1}")
                 layout.addWidget(cell, row + 2, col + 1)
                 row_cells.append(cell)
             self.cells.append(row_cells)
-        self.set_state(8, powered=True, state="active")
+        self.set_state(5)
 
-    def set_state(self, size: int, powered: bool, state: str = "active") -> None:
-        """按阵列边长、电源和业务状态刷新每个网格单元颜色。
+    def set_state(self, level: int, state: str = "active") -> None:
+        """按客户档位和请求状态刷新每个子阵单元颜色。
 
         Args:
-            size: 有效阵列边长，使用 ``ARRAY_MASKS`` 映射到行列掩码。
-            powered: 对应阵列电源是否打开。
-            state: ``active``、``cached``、``pending`` 或 ``failed`` 状态。
+            level: 客户阵列档位 1～5。
+            state: ``active``、``pending`` 或 ``failed`` 状态。
+
+        Raises:
+            ValueError: level 不属于 1～5。
         """
-        mask = ARRAY_MASKS.get(size, 0)
-        for row in range(8):
-            for col in range(8):
-                enabled = bool(mask & (1 << row)) and bool(mask & (1 << col))
+        edge = get_array_level_profile(level).subarray_edge
+        for row in range(16):
+            for col in range(16):
+                enabled = row < edge and col < edge
                 if enabled and state in ("pending", "failed"):
                     color = self.COLORS[state]
                 elif enabled:
-                    color = self.COLORS["active" if powered else "cached"]
+                    color = self.COLORS["active"]
                 else:
                     color = self.COLORS["disabled"]
                 self.cells[row][col].setStyleSheet(
-                    f"background:{color}; border:1px solid #888; font-size:8pt;"
+                    f"background:{color}; border:1px solid #888;"
                 )

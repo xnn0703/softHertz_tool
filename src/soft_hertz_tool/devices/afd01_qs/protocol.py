@@ -1,4 +1,4 @@
-"""AFD01_QS V1.6 串口协议编解码。
+"""AFD01_QS V1.7 串口协议编解码。
 
 该模块不依赖 Qt 或串口，设备 Driver、模拟器和单元测试共用同一份协议真值。
 """
@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import struct
+from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
 
@@ -28,8 +29,67 @@ CMD_NAMES = {
     0xA1: "ARRAY_STATUS",
 }
 
-# KA256 的阵列规模与有效行列位掩码。
-ARRAY_MASKS = {8: 0xFF, 7: 0xFE, 6: 0x7E, 5: 0x7C, 4: 0x3C}
+
+@dataclass(frozen=True)
+class ArrayLevelProfile:
+    """一个客户阵列档位及其有效子阵显示参数。
+
+    Attributes:
+        level: 0x0B/A1 线协议中的客户档位。
+        subarray_edge: 客户可见有效子阵的单边数量。
+    """
+
+    level: int
+    subarray_edge: int
+
+    @property
+    def active_cells(self) -> int:
+        """返回该档位有效子阵单元总数。"""
+
+        return self.subarray_edge * self.subarray_edge
+
+
+# 0x0B/A1 只公开客户档位和有效子阵规模；内部器件布局不进入 UI 或日志语义。
+ARRAY_LEVEL_PROFILES = {
+    1: ArrayLevelProfile(1, 8),
+    2: ArrayLevelProfile(2, 10),
+    3: ArrayLevelProfile(3, 12),
+    4: ArrayLevelProfile(4, 14),
+    5: ArrayLevelProfile(5, 16),
+}
+
+
+def get_array_level_profile(level: int) -> ArrayLevelProfile:
+    """查询客户阵列档位的显式 Profile。
+
+    Args:
+        level: 0x0B/A1 档位值。
+
+    Returns:
+        对应的客户有效子阵 Profile。
+
+    Raises:
+        ValueError: 档位不属于 1～5。
+    """
+
+    try:
+        return ARRAY_LEVEL_PROFILES[level]
+    except KeyError:
+        raise ValueError(f"阵列档位应为 1~5，实际 {level}") from None
+
+
+def format_array_level(level: int) -> str:
+    """生成客户界面和日志共用的档位说明。
+
+    Args:
+        level: 0x0B/A1 档位值。
+
+    Returns:
+        例如 ``档位4（14×14子阵）`` 的客户可见文本。
+    """
+
+    profile = get_array_level_profile(level)
+    return f"档位{profile.level}（{profile.subarray_edge}×{profile.subarray_edge}子阵）"
 
 
 def checksum(data: bytes) -> int:
@@ -119,18 +179,18 @@ def _require(payload: bytes, length: int, command: int) -> None:
 
 
 def decode_payload(command: int, payload: bytes) -> Dict[str, Any]:
-    """解码 A0/A1 语义字段，或保留其他命令的原始载荷。
+    """解码 0x0B、A0、A1 语义字段，或保留其他命令的原始载荷。
 
     Args:
         command: QS 命令号。
         payload: 已通过帧级校验的命令载荷。
 
     Returns:
-        A0 返回含物理量的字典，其中角度字段单位为度；A1 返回阵列状态；
-        其他命令返回十六进制载荷。
+        0x0B 返回档位请求，A0 返回含物理量的字典且角度单位为度，
+        A1 只返回当前 TX/RX 客户阵列档位；其他命令返回十六进制载荷。
 
     Raises:
-        ValueError: A0 或 A1 的固定载荷长度不正确。
+        ValueError: 0x0B、A0、A1 的固定载荷长度或 A1 档位不正确。
         struct.error: 载荷无法按协议字段解包。
     """
     if command == 0xA0:
@@ -157,20 +217,38 @@ def decode_payload(command: int, payload: bytes) -> Dict[str, Any]:
             "status",
             "time",
         )
-        result = dict(zip(keys, values))
+        decoded = dict(zip(keys, values))
         for key in ("lon", "lat", "pitch", "roll", "heading", "theta", "phi"):
-            result[key] /= 100.0
-        return result
+            decoded[key] /= 100.0
+        return decoded
+
+    if command == 0x0B:
+        _require(payload, 3, command)
+        operation, tx_level, rx_level = payload
+        tx_profile = ARRAY_LEVEL_PROFILES.get(tx_level)
+        rx_profile = ARRAY_LEVEL_PROFILES.get(rx_level)
+        return {
+            "operation": operation,
+            "tx_level": tx_level,
+            "rx_level": rx_level,
+            "tx_subarray_edge": tx_profile.subarray_edge if tx_profile else None,
+            "rx_subarray_edge": rx_profile.subarray_edge if rx_profile else None,
+        }
 
     if command == 0xA1:
-        _require(payload, 5, command)
-        result, tx_size, rx_size, power_flags, apply_flags = payload
+        _require(payload, 2, command)
+        tx_level, rx_level = payload
+        try:
+            get_array_level_profile(tx_level)
+        except ValueError:
+            raise ValueError(f"0xA1 TX 档位应为 1~5，实际 {tx_level}") from None
+        try:
+            get_array_level_profile(rx_level)
+        except ValueError:
+            raise ValueError(f"0xA1 RX 档位应为 1~5，实际 {rx_level}") from None
         return {
-            "result": result,
-            "tx_size": tx_size,
-            "rx_size": rx_size,
-            "power_flags": power_flags,
-            "apply_flags": apply_flags,
+            "tx_level": tx_level,
+            "rx_level": rx_level,
         }
 
     # 控制指令仅需保留原始载荷，方便日志、模拟器和后续扩展观察。
@@ -309,7 +387,7 @@ def build_tle(line1: str, line2: str) -> bytes:
 
 
 def build_array_query() -> bytes:
-    """构建 0x0B 阵列规模查询帧。
+    """构建 0x0B 有效子阵档位查询帧。
 
     Returns:
         操作码为查询、TX/RX 字段均为零的完整 QS 帧。
@@ -317,25 +395,25 @@ def build_array_query() -> bytes:
     return build_frame(0x0B, b"\x00\x00\x00")
 
 
-def build_array_set(tx_size: Optional[int], rx_size: Optional[int]) -> bytes:
-    """构建 0x0B KA256 TX/RX 阵列规模设置帧。
+def build_array_set(tx_level: Optional[int], rx_level: Optional[int]) -> bytes:
+    """构建 0x0B TX/RX 有效子阵档位设置帧。
 
     Args:
-        tx_size: TX 边长；``None`` 编码为 0xFF，表示保持当前值。
-        rx_size: RX 边长；``None`` 编码为 0xFF，表示保持当前值。
+        tx_level: TX 档位 1～5；``None`` 编码为 0xFF，表示保持当前值。
+        rx_level: RX 档位 1～5；``None`` 编码为 0xFF，表示保持当前值。
 
     Returns:
         操作码为设置的完整 QS 帧。
 
     Raises:
-        ValueError: 非保持值不属于 4、5、6、7、8。
+        ValueError: 非保持值不属于档位 1～5。
     """
-    tx = 0xFF if tx_size is None else tx_size
-    rx = 0xFF if rx_size is None else rx_size
-    if tx != 0xFF and tx not in ARRAY_MASKS:
-        raise ValueError("TX 阵列规模只支持 4~8")
-    if rx != 0xFF and rx not in ARRAY_MASKS:
-        raise ValueError("RX 阵列规模只支持 4~8")
+    tx = 0xFF if tx_level is None else tx_level
+    rx = 0xFF if rx_level is None else rx_level
+    if tx != 0xFF and tx not in ARRAY_LEVEL_PROFILES:
+        raise ValueError("TX 阵列档位只支持 1~5")
+    if rx != 0xFF and rx not in ARRAY_LEVEL_PROFILES:
+        raise ValueError("RX 阵列档位只支持 1~5")
     return build_frame(0x0B, bytes([1, tx, rx]))
 
 
@@ -347,7 +425,7 @@ def describe(parsed: Optional[Dict[str, Any]], message: str) -> str:
         message: 帧解析结果或错误文本。
 
     Returns:
-        A0/A1 的关键状态摘要，或普通命令名/错误文本。
+        0x0B、A0、A1 的关键状态摘要，或普通命令名/错误文本。
     """
     if parsed is None:
         return message
@@ -358,9 +436,29 @@ def describe(parsed: Optional[Dict[str, Any]], message: str) -> str:
             f"A0 GPS={decoded['gps_lock']} mode={decoded['mode']} "
             f"beam=({decoded['theta']:.2f},{decoded['phi']:.2f}) status=0x{decoded['status']:02X}"
         )
+    if command == 0x0B:
+        if decoded["operation"] == 0:
+            return "0B 查询阵列档位"
+        if decoded["operation"] != 1:
+            return f"0B 非法操作码 0x{decoded['operation']:02X}"
+
+        def request_value_text(level: int) -> str:
+            """把设置字段转换为客户档位、保持或非法值说明。"""
+
+            if level == 0xFF:
+                return "保持"
+            try:
+                return format_array_level(level)
+            except ValueError:
+                return f"非法档位({level})"
+
+        return (
+            f"0B 设置 TX={request_value_text(decoded['tx_level'])} "
+            f"RX={request_value_text(decoded['rx_level'])}"
+        )
     if command == 0xA1:
         return (
-            f"A1 result=0x{decoded['result']:02X} TX={decoded['tx_size']} RX={decoded['rx_size']} "
-            f"power=0x{decoded['power_flags']:02X} apply=0x{decoded['apply_flags']:02X}"
+            f"A1 当前 TX={format_array_level(decoded['tx_level'])} "
+            f"RX={format_array_level(decoded['rx_level'])}"
         )
     return parsed["name"]

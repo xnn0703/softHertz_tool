@@ -16,6 +16,7 @@ from soft_hertz_tool.devices.afd01_qs.driver import Afd01QsDriver
 from soft_hertz_tool.devices.afd01_qs.models import ReportRateMeter
 from soft_hertz_tool.devices.afd01_qs.panel import Afd01QsPanel, QSPanel
 from soft_hertz_tool.devices.afd01_qs.protocol import (
+    ARRAY_LEVEL_PROFILES,
     build_angle_command,
     build_array_query,
     build_array_set,
@@ -25,6 +26,7 @@ from soft_hertz_tool.devices.afd01_qs.protocol import (
     build_snr_report,
     build_tle,
     build_u8_command,
+    describe,
     parse_frame,
 )
 from soft_hertz_tool.devices.afd01_qs.simulator import QSDeviceSimulator
@@ -102,6 +104,28 @@ def test_protocol_builders_cover_commands_01_through_0b():
     assert _parse_ok(frames[0x0B])["payload"] == b"\x00\x00\x00"
 
 
+def test_array_level_profiles_expose_customer_subarray_sizes():
+    assert {
+        level: (profile.subarray_edge, profile.active_cells)
+        for level, profile in ARRAY_LEVEL_PROFILES.items()
+    } == {
+        1: (8, 64),
+        2: (10, 100),
+        3: (12, 144),
+        4: (14, 196),
+        5: (16, 256),
+    }
+    assert all(set(vars(profile)) == {"level", "subarray_edge"} for profile in ARRAY_LEVEL_PROFILES.values())
+
+    assert build_array_query() == bytes.fromhex("55 0B 00 03 00 00 00 00 0E")
+    assert build_array_set(4, 1) == bytes.fromhex("55 0B 00 03 01 04 01 00 14")
+    assert build_frame(0xA1, b"\x04\x01") == bytes.fromhex(
+        "55 A1 00 02 04 01 00 A8"
+    )
+    assert _parse_ok(build_array_set(4, 1))["payload"] == b"\x01\x04\x01"
+    assert _parse_ok(build_array_set(None, 3))["payload"] == b"\x01\xFF\x03"
+
+
 @pytest.mark.parametrize(
     ("builder", "message"),
     [
@@ -111,7 +135,10 @@ def test_protocol_builders_cover_commands_01_through_0b():
         (lambda: build_beam_angle(0x07, 90.01, 0), "theta"),
         (lambda: build_beam_angle(0x06, 0, 0), "无效"),
         (lambda: build_tle("X" * 70, ""), "69"),
-        (lambda: build_array_set(3, 8), "4~8"),
+        (lambda: build_array_set(0, 5), "1~5"),
+        (lambda: build_array_set(6, 5), "1~5"),
+        (lambda: build_array_set(7, 5), "1~5"),
+        (lambda: build_array_set(8, 5), "1~5"),
     ],
 )
 def test_protocol_rejects_invalid_control_parameters(builder, message):
@@ -127,14 +154,39 @@ def test_a0_and_a1_are_decoded_to_semantic_fields():
     assert a0["decoded"]["theta"] == 12.34
     assert a0["decoded"]["status"] == 0x20
 
-    a1 = _parse_ok(build_frame(0xA1, b"\x00\x07\x06\x03\x03"))
+    a1 = _parse_ok(build_frame(0xA1, b"\x04\x03"))
     assert a1["decoded"] == {
-        "result": 0,
-        "tx_size": 7,
-        "rx_size": 6,
-        "power_flags": 3,
-        "apply_flags": 3,
+        "tx_level": 4,
+        "rx_level": 3,
     }
+
+
+@pytest.mark.parametrize("legacy_level", (6, 7, 8))
+def test_a1_explicitly_rejects_legacy_internal_values(legacy_level):
+    parsed, message = parse_frame(build_frame(0xA1, bytes([legacy_level, 5])))
+    assert parsed is None
+    assert "档位应为 1~5" in message
+
+
+def test_a1_rejects_legacy_five_byte_payload():
+    parsed, message = parse_frame(build_frame(0xA1, b"\x00\x04\x03\x03\x03"))
+    assert parsed is None
+    assert "载荷长度应为 2" in message
+
+
+def test_array_descriptions_use_customer_level_and_subarray_semantics():
+    request = _parse_ok(build_array_set(4, 1))
+    response = _parse_ok(build_frame(0xA1, b"\x04\x01"))
+
+    assert describe(request, "OK") == "0B 设置 TX=档位4（14×14子阵） RX=档位1（8×8子阵）"
+    summary = describe(response, "OK")
+    assert summary.startswith("A1 当前 ")
+    assert "TX=档位4（14×14子阵）" in summary
+    assert "RX=档位1（8×8子阵）" in summary
+    assert "result" not in summary
+    assert "power" not in summary
+    assert "apply" not in summary
+    assert "7×7" not in summary
 
 
 def test_parser_recovers_split_sticky_bad_checksum_garbage_and_bad_length():
@@ -185,17 +237,34 @@ def test_driver_uses_shared_transport_and_dispatches_a0_a1_records():
     driver.array_status_signal.connect(array_status.append)
     driver.frame_signal.connect(records.append)
 
-    driver.handle_bytes(build_frame(0xA0, _a0_payload()) + build_frame(0xA1, b"\x00\x08\x07\x03\x01"))
+    driver.handle_bytes(build_frame(0xA0, _a0_payload()) + build_frame(0xA1, b"\x05\x04"))
     assert telemetry[-1]["heading"] == 7.89
-    assert array_status[-1]["rx_size"] == 7
+    assert array_status[-1]["rx_level"] == 4
+    assert set(array_status[-1]) == {"tx_level", "rx_level"}
     assert len(records) == 2
     assert all(isinstance(record, FrameRecord) for record in records)
     assert records[0].model == "AFD01_QS"
     assert records[0].direction == "RX"
+    assert "档位5（16×16子阵）" in records[1].result
+    assert records[1].raw == build_frame(0xA1, b"\x05\x04")
 
     driver.handle_bytes(b"\x99")
     assert records[-1].direction == "DROP"
     assert records[-1].level == "ERROR"
+    driver.stop()
+
+
+def test_driver_tx_log_describes_array_level_and_keeps_raw_frame(monkeypatch):
+    driver = Afd01QsDriver("SIM", 921600)
+    records = []
+    monkeypatch.setattr(driver, "send_bytes", lambda _frame: True)
+    driver.frame_signal.connect(records.append)
+
+    assert driver.set_array_level(4, 1)
+    assert records[-1].direction == "TX"
+    assert records[-1].command == "0x0B ARRAY_CONFIG"
+    assert records[-1].result == "0B 设置 TX=档位4（14×14子阵） RX=档位1（8×8子阵）"
+    assert records[-1].raw == build_array_set(4, 1)
     driver.stop()
 
 
@@ -221,13 +290,24 @@ class FakeSerial:
 def test_simulator_applies_array_status_and_emits_100hz_without_burst():
     serial = FakeSerial()
     simulator = QSDeviceSimulator(serial)
-    simulator.process_input(build_array_set(7, 6))
-    assert _parse_ok(serial.writes[-1][1])["decoded"]["tx_size"] == 7
-    assert _parse_ok(serial.writes[-1][1])["decoded"]["rx_size"] == 6
+    assert simulator.tx_level == 5
+    assert simulator.rx_level == 5
+    simulator.process_input(build_array_query())
+    assert serial.writes[-1][1] == bytes.fromhex("55 A1 00 02 05 05 00 AD")
+    simulator.process_input(build_array_set(4, 3))
+    assert _parse_ok(serial.writes[-1][1])["decoded"]["tx_level"] == 4
+    assert _parse_ok(serial.writes[-1][1])["decoded"]["rx_level"] == 3
 
-    simulator.process_input(build_array_set(4, 4))
-    assert _parse_ok(serial.writes[-1][1])["decoded"]["tx_size"] == 4
-    assert _parse_ok(serial.writes[-1][1])["decoded"]["rx_size"] == 4
+    simulator.process_input(build_array_set(1, 1))
+    assert _parse_ok(serial.writes[-1][1])["decoded"]["tx_level"] == 1
+    assert _parse_ok(serial.writes[-1][1])["decoded"]["rx_level"] == 1
+
+    for legacy_level in (6, 7, 8):
+        simulator.process_input(build_frame(0x0B, bytes([1, legacy_level, 5])))
+        rejected = _parse_ok(serial.writes[-1][1])["decoded"]
+        assert rejected["tx_level"] == 1
+        assert rejected["rx_level"] == 1
+        assert set(rejected) == {"tx_level", "rx_level"}
 
     serial.writes.clear()
     simulator.run(duration=0.31)
@@ -237,18 +317,19 @@ def test_simulator_applies_array_status_and_emits_100hz_without_burst():
     assert intervals and min(intervals) > 0.004
 
 
-def test_array_grid_preserves_ka256_masks_and_colors(qt_app):
+def test_array_grid_displays_16x16_customer_subarray_and_colors(qt_app):
     grid = ArrayGridWidget("TX")
-    grid.set_state(7, powered=True, state="pending")
-    assert sum(len(row) for row in grid.cells) == 64
-    assert "#f2c94c" in grid.cells[1][1].styleSheet()
-    assert "#d6d6d6" in grid.cells[0][0].styleSheet()
+    grid.set_state(4, state="pending")
+    assert sum(len(row) for row in grid.cells) == 256
+    assert "#f2c94c" in grid.cells[0][0].styleSheet()
+    assert "#d6d6d6" in grid.cells[15][15].styleSheet()
 
-    grid.set_state(4, powered=True, state="active")
-    active_cells = sum(
-        "#4f9dd9" in cell.styleSheet() for row in grid.cells for cell in row
-    )
-    assert active_cells == 16
+    for level, expected_active in ((1, 64), (2, 100), (3, 144), (4, 196), (5, 256)):
+        grid.set_state(level, state="active")
+        active_cells = sum(
+            "#4f9dd9" in cell.styleSheet() for row in grid.cells for cell in row
+        )
+        assert active_cells == expected_active
     grid.deleteLater()
     qt_app.processEvents()
 
@@ -259,10 +340,15 @@ class FakeWorker:
     def __init__(self):
         self.frames = []
         self.stop_count = 0
+        self.accepted = True
 
     def send_frame(self, frame):
         self.frames.append(frame)
-        return True
+        return self.accepted
+
+    def set_array_level(self, tx_level, rx_level):
+        self.frames.append((tx_level, rx_level))
+        return self.accepted
 
     def stop(self):
         self.stop_count += 1
@@ -276,6 +362,10 @@ def test_panel_uses_shared_connection_and_enforces_array_request_timeout(qt_app)
     panel = Afd01QsPanel()
     assert QSPanel is Afd01QsPanel
     assert isinstance(panel.serial_connection, SerialConnectionWidget)
+    assert panel.tx_level_cb.currentData() == 5
+    assert panel.tx_level_cb.currentText() == "档位5（16×16子阵）"
+    assert panel.tx_level_cb.itemData(panel.tx_level_cb.count() - 1) == 1
+    assert panel.tx_level_cb.itemText(panel.tx_level_cb.count() - 1) == "档位1（8×8子阵）"
     panel.serial_connection.set_stop_failed("停止超时")
     assert panel.serial_connection._state == SerialConnectionWidget.STOP_FAILED
     assert panel.serial_connection.connect_button.text() == "重试关闭"
@@ -289,8 +379,8 @@ def test_panel_uses_shared_connection_and_enforces_array_request_timeout(qt_app)
     panel._on_driver_telemetry(fake, 7, {"heading": 2.0})
     assert panel._latest_telemetry == {"heading": 2.0}
 
-    panel._begin_array_request(build_array_query())
-    panel._begin_array_request(build_array_query())
+    assert panel._begin_array_request(build_array_query())
+    assert not panel._begin_array_request(build_array_query())
     assert len(fake.frames) == 1
     assert panel._array_pending is True
     assert panel._array_timeout.interval() == 3000
@@ -300,11 +390,61 @@ def test_panel_uses_shared_connection_and_enforces_array_request_timeout(qt_app)
     assert not panel._array_pending
     assert not panel.array_apply_btn.isEnabled()
     assert "超时" in panel.array_status_label.text()
+    assert "#eb5757" in panel.tx_grid.cells[0][0].styleSheet()
 
     panel.shutdown()
     panel.shutdown()
     assert fake.stop_count == 1
     assert not panel._telemetry_timer.isActive()
+    panel.deleteLater()
+    qt_app.processEvents()
+
+
+def test_panel_marks_array_apply_as_failed_when_request_is_not_queued(qt_app):
+    panel = Afd01QsPanel()
+    fake = FakeWorker()
+    fake.accepted = False
+    panel.worker = fake
+    panel.tx_level_cb.setCurrentIndex(panel.tx_level_cb.findData(4))
+    panel.rx_level_cb.setCurrentIndex(panel.rx_level_cb.findData(1))
+
+    panel._apply_array()
+
+    assert not panel._array_pending
+    assert "未进入发送队列" in panel.array_status_label.text()
+    assert "#eb5757" in panel.tx_grid.cells[0][0].styleSheet()
+    assert "#eb5757" in panel.rx_grid.cells[0][0].styleSheet()
+
+    panel.shutdown()
+    panel.deleteLater()
+    qt_app.processEvents()
+
+
+def test_panel_applies_a1_customer_level_status(qt_app):
+    panel = Afd01QsPanel()
+    status = {
+        "tx_level": 4,
+        "rx_level": 1,
+    }
+    stale_worker = FakeWorker()
+    panel.worker = FakeWorker()
+    panel._connection_generation = 2
+    panel._on_driver_array_status(stale_worker, 1, status)
+    assert panel.tx_level_cb.currentData() == 5
+
+    panel._on_driver_array_status(panel.worker, 2, status)
+
+    assert panel.tx_level_cb.currentData() == 4
+    assert panel.rx_level_cb.currentData() == 1
+    assert "TX 档位4（14×14子阵）" in panel.array_status_label.text()
+    assert "RX 档位1（8×8子阵）" in panel.array_status_label.text()
+    assert "电源" not in panel.array_status_label.text()
+    assert "确认=" not in panel.array_status_label.text()
+    assert "4×4" not in panel.array_status_label.text()
+    assert "#4f9dd9" in panel.tx_grid.cells[0][0].styleSheet()
+    assert "#4f9dd9" in panel.rx_grid.cells[0][0].styleSheet()
+
+    panel.shutdown()
     panel.deleteLater()
     qt_app.processEvents()
 

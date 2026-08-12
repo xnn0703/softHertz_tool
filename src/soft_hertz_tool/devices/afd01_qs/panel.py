@@ -24,12 +24,13 @@ from PySide6.QtWidgets import (
 )
 
 from soft_hertz_tool.devices.afd01_qs.driver import Afd01QsDriver
+from soft_hertz_tool.devices.afd01_qs.protocol import ARRAY_LEVEL_PROFILES, format_array_level
 from soft_hertz_tool.devices.afd01_qs.widgets import ArrayGridWidget
 from soft_hertz_tool.shared.ui.serial_connection import SerialConnectionWidget
 
 
 class Afd01QsPanel(QWidget):
-    """QS V1.6 控制、实时状态与 KA256 阵列页面。"""
+    """QS V1.7 控制、实时状态与有效子阵档位页面。"""
 
     frame_signal = Signal(object)
 
@@ -47,10 +48,8 @@ class Afd01QsPanel(QWidget):
         self._array_supported = True
         self._connection_generation = 0
         self._confirmed_array = {
-            "tx_size": 8,
-            "rx_size": 8,
-            "power_flags": 0,
-            "apply_flags": 0,
+            "tx_level": 5,
+            "rx_level": 5,
         }
         self._shutdown = False
 
@@ -90,7 +89,7 @@ class Afd01QsPanel(QWidget):
         return widget
 
     def _build_ui(self) -> None:
-        """组装串口、QS 指令、A0 遥测和 KA256 阵列控件。"""
+        """组装串口、QS 指令、A0 遥测和有效子阵档位控件。"""
         layout = QVBoxLayout(self)
 
         serial_group = QGroupBox("AFD01_QS 串口")
@@ -109,7 +108,7 @@ class Afd01QsPanel(QWidget):
         self.connect_btn = self.serial_connection.connect_button
         self.connection_label = self.serial_connection.status_label
 
-        command_group = QGroupBox("QS V1.6 控制 (0x01~0x0A)")
+        command_group = QGroupBox("QS V1.7 控制 (0x01~0x0A)")
         grid = QGridLayout(command_group)
 
         self.snr = self._double(0, -100, 100)
@@ -190,24 +189,25 @@ class Afd01QsPanel(QWidget):
         telemetry_layout.addWidget(self.telemetry_table)
         middle.addWidget(telemetry_group, 1)
 
-        array_group = QGroupBox("KA256 阵列规模 (0x0B/0xA1)")
+        array_group = QGroupBox("TX/RX 有效子阵档位 (0x0B/0xA1)")
         array_layout = QVBoxLayout(array_group)
         actions = QHBoxLayout()
-        self.tx_size_cb = QComboBox()
-        self.rx_size_cb = QComboBox()
-        for size in (8, 7, 6, 5, 4):
-            self.tx_size_cb.addItem(f"{size}×{size}", size)
-            self.rx_size_cb.addItem(f"{size}×{size}", size)
-        self.tx_size_cb.currentIndexChanged.connect(self._preview_array)
-        self.rx_size_cb.currentIndexChanged.connect(self._preview_array)
+        self.tx_level_cb = QComboBox()
+        self.rx_level_cb = QComboBox()
+        for level in reversed(ARRAY_LEVEL_PROFILES):
+            text = format_array_level(level)
+            self.tx_level_cb.addItem(text, level)
+            self.rx_level_cb.addItem(text, level)
+        self.tx_level_cb.currentIndexChanged.connect(self._preview_array)
+        self.rx_level_cb.currentIndexChanged.connect(self._preview_array)
         self.array_apply_btn = QPushButton("应用")
         self.array_read_btn = QPushButton("读取")
         self.array_apply_btn.clicked.connect(self._apply_array)
         self.array_read_btn.clicked.connect(self._query_array)
         actions.addWidget(QLabel("TX:"))
-        actions.addWidget(self.tx_size_cb)
+        actions.addWidget(self.tx_level_cb)
         actions.addWidget(QLabel("RX:"))
-        actions.addWidget(self.rx_size_cb)
+        actions.addWidget(self.rx_level_cb)
         actions.addWidget(self.array_apply_btn)
         actions.addWidget(self.array_read_btn)
         array_layout.addLayout(actions)
@@ -617,24 +617,14 @@ class Afd01QsPanel(QWidget):
 
     @Slot()
     def _preview_array(self) -> None:
-        """根据待选规模与已确认状态预览 KA256 TX/RX 网格。"""
-        tx_size = self.tx_size_cb.currentData()
-        rx_size = self.rx_size_cb.currentData()
+        """根据待选档位与已确认状态预览 TX/RX 客户子阵网格。"""
+        tx_level = self.tx_level_cb.currentData()
+        rx_level = self.rx_level_cb.currentData()
         confirmed = self._confirmed_array
-        tx_changed = tx_size != confirmed["tx_size"]
-        rx_changed = rx_size != confirmed["rx_size"]
-        self.tx_grid.set_state(
-            tx_size,
-            bool(confirmed["power_flags"] & 1),
-            "pending" if tx_changed else "active",
-        )
-        self.rx_grid.set_state(
-            rx_size,
-            bool(confirmed["power_flags"] & 2),
-            "pending" if rx_changed else "active",
-        )
-        if tx_changed and not (confirmed["power_flags"] & 1):
-            self.array_status_label.setText("TX 已预览；发射关闭时将缓存，待发射开启后生效")
+        tx_changed = tx_level != confirmed["tx_level"]
+        rx_changed = rx_level != confirmed["rx_level"]
+        self.tx_grid.set_state(tx_level, "pending" if tx_changed else "active")
+        self.rx_grid.set_state(rx_level, "pending" if rx_changed else "active")
 
     def _set_array_busy(self, busy: bool) -> None:
         """按请求中状态和固件兼容性启用或禁用阵列按钮。
@@ -649,20 +639,24 @@ class Afd01QsPanel(QWidget):
     def _begin_array_request(
         self,
         action: Union[Callable[[Afd01QsDriver], bool], bytes],
-    ) -> None:
+    ) -> bool:
         """发送唯一的阵列请求并启动 A1 回读超时计时。
 
         Args:
             action: 正式页面使用接收 Driver 的语义操作；字节帧仅兼容旧私有测试。
 
         状态：请求未结束时拒绝新请求；发送成功后等待 A1 最多 3 秒。
+
+        Returns:
+            请求是否已进入 Driver 发送队列。
         """
         # 固件不支持并发阵列命令；单请求和超时降级保护其他 QS 指令继续可用。
         if self._array_pending:
-            return
+            return False
         if not self.worker or not self.worker.running:
+            self.array_status_label.setText("请求未发送：请先打开串口")
             QMessageBox.warning(self, "警告", "请先打开串口")
-            return
+            return False
         self._array_pending = True
         self._set_array_busy(True)
         # bytes 分支只用于兼容旧 QSPanel 私有方法测试；正式页面始终调用 Driver 语义接口。
@@ -675,13 +669,22 @@ class Afd01QsPanel(QWidget):
         except (ValueError, UnicodeEncodeError) as exc:
             self._array_pending = False
             self._set_array_busy(False)
+            self.array_status_label.setText(f"请求未发送：{exc}")
             QMessageBox.warning(self, "参数错误", str(exc))
-            return
+            return False
         if not accepted:
             self._array_pending = False
             self._set_array_busy(False)
-            return
+            self.array_status_label.setText("请求未进入发送队列，设备状态未改变")
+            return False
         self._array_timeout.start(3000)
+        return True
+
+    def _set_current_array_grid_state(self, state: str) -> None:
+        """以当前下拉档位更新两块网格。"""
+
+        self.tx_grid.set_state(self.tx_level_cb.currentData(), state)
+        self.rx_grid.set_state(self.rx_level_cb.currentData(), state)
 
     @Slot()
     def _query_array(self) -> None:
@@ -691,61 +694,33 @@ class Afd01QsPanel(QWidget):
     @Slot()
     def _apply_array(self) -> None:
         """把当前 TX/RX 选择标为待确认并发送阵列设置请求。"""
-        self.tx_grid.set_state(
-            self.tx_size_cb.currentData(),
-            bool(self._confirmed_array["power_flags"] & 1),
-            "pending",
-        )
-        self.rx_grid.set_state(
-            self.rx_size_cb.currentData(),
-            bool(self._confirmed_array["power_flags"] & 2),
-            "pending",
-        )
-        self._begin_array_request(
-            lambda driver: driver.set_array_size(
-                self.tx_size_cb.currentData(),
-                self.rx_size_cb.currentData(),
+        accepted = self._begin_array_request(
+            lambda driver: driver.set_array_level(
+                self.tx_level_cb.currentData(),
+                self.rx_level_cb.currentData(),
             )
         )
+        self._set_current_array_grid_state("pending" if accepted else "failed")
 
     @Slot(dict)
     def _on_array_status(self, status: Dict[str, int]) -> None:
-        """应用 A1 回读，结束请求并显示阵列、电源和确认状态。
+        """应用 A1 回读，结束请求并显示当前 TX/RX 档位。
 
         Args:
-            status: 已解码 A1 字段，包含结果、TX/RX 规模及状态位。
+            status: 已解码 A1 字段，只包含当前 TX/RX 档位。
         """
         self._array_timeout.stop()
         self._array_pending = False
         self._array_supported = True
         self._set_array_busy(False)
         self._confirmed_array = dict(status)
-        self.tx_size_cb.setCurrentIndex(max(0, self.tx_size_cb.findData(status["tx_size"])))
-        self.rx_size_cb.setCurrentIndex(max(0, self.rx_size_cb.findData(status["rx_size"])))
-
-        result = status["result"]
-        tx_state = "failed" if result & 0x02 else "active"
-        rx_state = "failed" if result & 0x04 else "active"
-        self.tx_grid.set_state(status["tx_size"], bool(status["power_flags"] & 1), tx_state)
-        self.rx_grid.set_state(status["rx_size"], bool(status["power_flags"] & 2), rx_state)
-
-        notes = []
-        if result & 0x01:
-            notes.append("参数非法")
-        if result & 0x02:
-            notes.append("TX 回显失败")
-        if result & 0x04:
-            notes.append("RX 回显失败")
-        if result & 0x08:
-            notes.append("请求忙")
-        if not notes:
-            notes.append("成功")
-        tx_power = "开" if status["power_flags"] & 1 else "关"
-        rx_power = "开" if status["power_flags"] & 2 else "关"
+        self.tx_level_cb.setCurrentIndex(max(0, self.tx_level_cb.findData(status["tx_level"])))
+        self.rx_level_cb.setCurrentIndex(max(0, self.rx_level_cb.findData(status["rx_level"])))
+        self.tx_grid.set_state(status["tx_level"], "active")
+        self.rx_grid.set_state(status["rx_level"], "active")
         self.array_status_label.setText(
-            f"{', '.join(notes)} | TX {status['tx_size']}×{status['tx_size']} 电源{tx_power} "
-            f"确认={bool(status['apply_flags'] & 1)} | RX {status['rx_size']}×{status['rx_size']} "
-            f"电源{rx_power} 确认={bool(status['apply_flags'] & 2)}"
+            f"当前 TX {format_array_level(status['tx_level'])} | "
+            f"RX {format_array_level(status['rx_level'])}"
         )
 
     @Slot()
@@ -754,6 +729,7 @@ class Afd01QsPanel(QWidget):
         self._array_pending = False
         self._array_supported = False
         self._set_array_busy(False)
+        self._set_current_array_grid_state("failed")
         self.array_status_label.setText(
             "固件不支持或通信超时；其他 QS 功能不受影响，重新连接后可再查询"
         )

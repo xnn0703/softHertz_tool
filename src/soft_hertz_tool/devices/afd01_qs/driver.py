@@ -17,6 +17,7 @@ from soft_hertz_tool.devices.afd01_qs.protocol import (
     build_tle,
     build_u8_command,
     describe,
+    parse_frame,
 )
 from soft_hertz_tool.devices.afd01_qs.stream import FrameStreamParser
 from soft_hertz_tool.shared.observability import FrameRecord
@@ -99,15 +100,22 @@ class Afd01QsDriver(SerialThread):
         """
         accepted = self.send_bytes(frame)
         if accepted:
-            command = frame[1] if len(frame) > 1 else 0
+            parsed, message = parse_frame(frame)
+            command_value = frame[1] if len(frame) > 1 else 0
+            command = (
+                f"0x{parsed['command']:02X} {parsed['name']}"
+                if parsed is not None
+                else f"0x{command_value:02X}"
+            )
+            summary = describe(parsed, message)
             self.frame_signal.emit(
                 FrameRecord(
                     "AFD01_QS",
                     f"{self.port_name}/QS",
                     "TX",
-                    f"0x{command:02X}",
+                    command,
                     bytes(frame),
-                    "已进入发送队列",
+                    summary,
                 )
             )
         return accepted
@@ -233,27 +241,27 @@ class Afd01QsDriver(SerialThread):
         return self.send_frame(build_beam_angle(target, theta_deg, phi_deg))
 
     def query_array(self) -> bool:
-        """发送 0x0B 阵列规模查询。
+        """发送 0x0B 有效子阵档位查询。
 
         Returns:
             帧是否成功进入发送队列；A1 回读由 ``array_status_signal`` 发布。
         """
         return self.send_frame(build_array_query())
 
-    def set_array_size(self, tx_size: int, rx_size: int) -> bool:
-        """发送 0x0B TX/RX KA256 阵列规模设置。
+    def set_array_level(self, tx_level: int, rx_level: int) -> bool:
+        """发送 0x0B TX/RX 有效子阵档位设置。
 
         Args:
-            tx_size: TX 阵列边长，仅支持 4 至 8。
-            rx_size: RX 阵列边长，仅支持 4 至 8。
+            tx_level: TX 客户档位，仅支持 1 至 5。
+            rx_level: RX 客户档位，仅支持 1 至 5。
 
         Returns:
             帧是否成功进入发送队列。
 
         Raises:
-            ValueError: 阵列规模不受协议支持时由构帧器抛出。
+            ValueError: 阵列档位不受协议支持时由构帧器抛出。
         """
-        return self.send_frame(build_array_set(tx_size, rx_size))
+        return self.send_frame(build_array_set(tx_level, rx_level))
 
 
 # 过渡期兼容旧页面中的类名，新代码优先使用 Afd01QsDriver。
