@@ -688,7 +688,7 @@ class Afd01QsPanel(QWidget):
 
     @Slot()
     def _query_array(self) -> None:
-        """发送 KA256 阵列读取请求。"""
+        """发送有效子阵档位读取请求。"""
         self._begin_array_request(lambda driver: driver.query_array())
 
     @Slot()
