@@ -14,11 +14,13 @@ usage() {
   ./run.sh [--update] [app] [应用参数...]
   ./run.sh [--update] afdtr-sim [TX端口] [RX端口] [模拟器参数...]
   ./run.sh [--update] qs-sim <QS端口> [模拟器参数...]
+  ./run.sh [--update] ka-rf-sim <KaRF端口> [模拟器参数...]
 
 模式:
   app         启动 SoftHertz Tool（默认）
   afdtr-sim   启动 AFDT1024/AFDR1024 双串口模拟器
   qs-sim      启动 AFD01_QS 串口模拟器
+  ka-rf-sim   启动 KA_RF_UNIT 串口模拟器
 
 选项:
   --update, -u  更新依赖并重新注册 editable install
@@ -29,6 +31,7 @@ usage() {
   ./run.sh app --smoke
   ./run.sh afdtr-sim /dev/ttys010 /dev/ttys011 --ids 1,2,3
   ./run.sh qs-sim /dev/ttys012 --baudrate 921600
+  ./run.sh ka-rf-sim /dev/ttys013 --baudrate 460800 --report-hz 50
 EOF
 }
 
@@ -38,7 +41,7 @@ while (($#)); do
       FORCE_UPDATE=1
       shift
       ;;
-    app|afdtr-sim|qs-sim)
+    app|afdtr-sim|qs-sim|ka-rf-sim)
       if ((MODE_SELECTED)); then
         echo "✗ 只能选择一个运行模式" >&2
         exit 2
@@ -113,5 +116,9 @@ case "$MODE" in
   qs-sim)
     echo "▶ 启动 AFD01_QS 模拟器（Ctrl+C 退出）..."
     run_python_module soft_hertz_tool.devices.afd01_qs.simulator "$@"
+    ;;
+  ka-rf-sim)
+    echo "▶ 启动 KA_RF_UNIT 模拟器（Ctrl+C 退出）..."
+    run_python_module soft_hertz_tool.devices.ka_rf_unit.simulator "$@"
     ;;
 esac

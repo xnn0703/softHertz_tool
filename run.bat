@@ -41,6 +41,12 @@ if /I "%~1"=="qs-sim" (
   shift
   goto :parse_args
 )
+if /I "%~1"=="ka-rf-sim" (
+  set "MODE=ka-rf-sim"
+  set "MODE_SELECTED=1"
+  shift
+  goto :parse_args
+)
 if /I "%~1"=="--help" goto :usage
 if /I "%~1"=="-h" goto :usage
 goto :collect_args
@@ -102,6 +108,11 @@ if /I "%MODE%"=="qs-sim" (
   "%VENV_PYTHON%" -m soft_hertz_tool.devices.afd01_qs.simulator %FORWARD_ARGS%
   exit /b
 )
+if /I "%MODE%"=="ka-rf-sim" (
+  echo ^> 启动 KA_RF_UNIT 模拟器（Ctrl+C 退出）...
+  "%VENV_PYTHON%" -m soft_hertz_tool.devices.ka_rf_unit.simulator %FORWARD_ARGS%
+  exit /b
+)
 
 echo ^> 启动 SoftHertz Tool...
 "%VENV_PYTHON%" -m soft_hertz_tool %FORWARD_ARGS%
@@ -112,11 +123,13 @@ echo 用法:
 echo   run.bat [--update] [app] [应用参数...]
 echo   run.bat [--update] afdtr-sim [TX端口] [RX端口] [模拟器参数...]
 echo   run.bat [--update] qs-sim ^<QS端口^> [模拟器参数...]
+echo   run.bat [--update] ka-rf-sim ^<KaRF端口^> [模拟器参数...]
 echo.
 echo 模式:
 echo   app         启动 SoftHertz Tool（默认）
 echo   afdtr-sim   启动 AFDT1024/AFDR1024 双串口模拟器
 echo   qs-sim      启动 AFD01_QS 串口模拟器
+echo   ka-rf-sim   启动 KA_RF_UNIT 串口模拟器
 echo.
 echo 选项:
 echo   --update, -u  更新依赖并重新注册 editable install

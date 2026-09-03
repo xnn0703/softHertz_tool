@@ -6,6 +6,7 @@ SoftHertz Tool 是面向 SoftHertz 设备的跨平台串口调试上位机。项
 
 - `AFDTR`：组合 KaUDC004A、AFDT1024（1024 发射阵列）和 AFDR1024（1024 接收阵列）。
 - `AFD01_QS`：配置 AFD01_QS，接收实时状态，并配置、显示 TX/RX 有效子阵档位。
+- `KA_RF_UNIT`：配置 Ka 波段射频单元，发送 7 个控制命令（频点与极化、衰减、阵列使能、波束、外参、上报频率），解析并展示 `0x30 STATUS_REPORT`。
 
 ## 名称约定
 
@@ -57,6 +58,17 @@ AFDT1024/AFDR1024 支持一条总线连接多个子阵：
 - 不按旧的 4～8 编码语义自动兼容；收到旧值 6～8 时明确判为不兼容；
 - 阵列请求同一时刻只允许一个，3 秒超时且不自动重发；
 - 不支持阵列命令的固件只降级阵列功能，不影响其他 QS 指令。
+
+### KA_RF_UNIT 工作区
+
+- 支持 V1 控制命令：`0x10` 频点与收发极化、`0x11` 变频衰减、`0x12/0x13` TX/RX 阵列使能、`0x14` 波束（target mask 同时下发 TX/RX）、`0x15` 外参时钟（10/100 MHz）、`0x20` 主动上报频率（0~200 Hz，0 表示关闭）；
+- 解析 `0x30 STATUS_REPORT`（43 B payload / 51 B 完整帧），包含 uptime、conv_lock_mask、PA/TX/RX 使能、上报频率、整机软件版本、收发 RF/LO、衰减、外参、三处温度（int16/10）和四路原始 BeamH/V；
+- `conv_lock_mask` 仅展示关键三位：bit0=REF_VALID、bit1=RX_LO_LOCK、bit2=TX_LO_LOCK；
+- 收发 LO 字段留空表示 AUTO（编码 0）；手动值必须为偶数 MHz；
+- 衰减按 0.5 dB 步进（协议字段 ×10），上限 31.5 dB；
+- 0x12 TX 开启后 PA 自动跟随；TX 关闭时 PA 关闭；UI 不构造第二份硬件事实；
+- 串口默认 460800，可配 921600；流解析沿用统一分帧器与 DROP 监视；
+- 业务 UI 10 Hz 刷新状态表，1 秒未收到 STATUS_REPORT 时频率标签转红色"超时"。
 
 ### 工作区切换与报文监视
 
@@ -278,6 +290,16 @@ soft-hertz-qs-sim <QS模拟器端口> --baudrate 921600
 模拟器持续输出约 100 Hz 的 `0xA0`，并响应 `0x0B` 阵列查询/设置；返回的 `0xA1`
 载荷只含当前 TX/RX 档位。
 
+### KA_RF_UNIT
+
+```bash
+soft-hertz-ka-rf-sim <KaRF模拟器端口> --baudrate 460800 --report-hz 50
+```
+
+模拟器按 `--report-hz` 主动发送 `0x30 STATUS_REPORT`，并对 7 个控制命令返回
+标准结果码（`OK` / `BAD_LENGTH` / `OUT_OF_RANGE`）。`--report-hz 0` 关闭主动
+上报，便于手动触发。
+
 模拟器验证的是主机侧协议和数据流，不代表真实设备验收完成。
 
 ## 测试
@@ -398,6 +420,7 @@ CI 构建成功只说明 runner 上完成测试和打包。发布完成还必须
 | P0 | Windows EXE 原生验收 | 触发更新后的 CI 构建；下载 EXE，在干净 Windows 10 1809+ 或 Windows 11 启动，验证图标、Qt 资源、日志目录和串口打开 |
 | P0 | 真实设备回归 | KaUDC004A、AFDT1024、AFDR1024、AFD01_QS 分别完成配置/查询闭环并保存版本、串口参数、日志和结果 |
 | P0 | AFD01_QS 100 Hz 长稳 | 真实设备持续运行，记录丢帧率、超时恢复、CPU/内存、UI 响应和日志轮转 |
+| P1 | KA_RF_UNIT 真实设备验收 | 在 RS422 链路上确认频点/极化/衰减/波束/外参/上报频率全链路，记录版本、串口参数、日志和结果 |
 | P1 | 补齐 QS V1.7 受控协议 | 将允许入库的受控原件加入 `docs/protocols/controlled-originals`，逐字段核对当前实现 |
 | P1 | 确认 KaUDC004A 温度换算 | 用受控协议和真实设备确认温度原始值的偏移/符号规则，补充协议向量 |
 | P1 | 增加 KaUDC004A 模拟器 | 复用正式 protocol/stream，实现主要命令的设置与查询闭环 |

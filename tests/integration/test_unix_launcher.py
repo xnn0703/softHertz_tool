@@ -71,6 +71,10 @@ with open(os.environ["SOFTHERTZ_TEST_INVOCATIONS"], "a", encoding="utf-8") as st
             ["-m", "soft_hertz_tool.devices.afd01_qs.simulator"],
         ),
         (
+            ["ka-rf-sim"],
+            ["-m", "soft_hertz_tool.devices.ka_rf_unit.simulator"],
+        ),
+        (
             ["app", "--smoke", "--style", "Fusion"],
             ["-m", "soft_hertz_tool", "--smoke", "--style", "Fusion"],
         ),

@@ -23,6 +23,7 @@ dev = [
 soft-hertz-tool = "soft_hertz_tool.__main__:main"
 soft-hertz-afdtr-sim = "soft_hertz_tool.devices.afdtr1024.simulator:main"
 soft-hertz-qs-sim = "soft_hertz_tool.devices.afd01_qs.simulator:main"
+soft-hertz-ka-rf-sim = "soft_hertz_tool.devices.ka_rf_unit.simulator:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

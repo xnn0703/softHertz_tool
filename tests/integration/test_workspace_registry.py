@@ -22,7 +22,7 @@ from soft_hertz_tool.app.registry import WORKSPACE_SPECS, workspace_keys
 
 
 def test_registry_has_unique_expected_keys():
-    assert workspace_keys() == ("AFDTR", "AFD01_QS")
+    assert workspace_keys() == ("AFDTR", "AFD01_QS", "KA_RF_UNIT")
     assert len(set(workspace_keys())) == len(WORKSPACE_SPECS)
 
 
@@ -67,7 +67,7 @@ def test_main_window_switches_and_shuts_down_workspaces(tmp_path):
     legacy_settings = _ini_settings(tmp_path / "legacy.ini")
     window = MainWindow(settings=settings, legacy_settings=legacy_settings)
     assert window.windowTitle() == PRODUCT_DISPLAY_NAME
-    assert window.pages.count() == 2
+    assert window.pages.count() == 3
     assert not window.workspaces[1].panel._telemetry_timer.isActive()
     window.model_combo.setCurrentIndex(1)
     assert window.pages.currentIndex() == 1
