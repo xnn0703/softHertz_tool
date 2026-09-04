@@ -36,7 +36,7 @@ from soft_hertz_tool.shared.ui.serial_connection import SerialConnectionWidget
 BAUD_RATES = (460800, 921600)
 
 POLAR_OPTIONS = (("LHCP(0)", protocol.POLAR_LEFT_CIRCLE), ("RHCP(1)", protocol.POLAR_RIGHT_CIRCLE))
-EXT_REF_OPTIONS = (("10 MHz", 10), ("100 MHz", 100))
+EXT_REF_OPTIONS = (("10 MHz", 10), ("50 MHz", 50))
 
 ENABLE_OPTIONS = (("关闭", False), ("开启", True))
 

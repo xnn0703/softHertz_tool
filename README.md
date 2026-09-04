@@ -61,7 +61,7 @@ AFDT1024/AFDR1024 支持一条总线连接多个子阵：
 
 ### KA_RF_UNIT 工作区
 
-- 支持 V1 控制命令：`0x10` 频点与收发极化、`0x11` 变频衰减、`0x12/0x13` TX/RX 阵列使能、`0x14` 波束（target mask 同时下发 TX/RX）、`0x15` 外参时钟（10/100 MHz）、`0x20` 主动上报频率（0~200 Hz，0 表示关闭）；
+- 支持 V1 控制命令：`0x10` 频点与收发极化、`0x11` 变频衰减、`0x12/0x13` TX/RX 阵列使能、`0x14` 波束（target mask 同时下发 TX/RX）、`0x15` 外参时钟（10/50 MHz）、`0x20` 主动上报频率（0~200 Hz，0 表示关闭）；
 - 解析 `0x30 STATUS_REPORT`（43 B payload / 51 B 完整帧），包含 uptime、conv_lock_mask、PA/TX/RX 使能、上报频率、整机软件版本、收发 RF/LO、衰减、外参、三处温度（int16/10）和四路原始 BeamH/V；
 - `conv_lock_mask` 仅展示关键三位：bit0=REF_VALID、bit1=RX_LO_LOCK、bit2=TX_LO_LOCK；
 - 收发 LO 字段留空表示 AUTO（编码 0）；手动值必须为偶数 MHz；

@@ -50,6 +50,7 @@ RESULT_BAD_VERSION = 0x01
 RESULT_BAD_LENGTH = 0x02
 RESULT_OUT_OF_RANGE = 0x03
 RESULT_UNSUPPORTED = 0x04
+RESULT_PERSISTENCE_FAILED = 0x05
 
 # 0x14 目标掩码。
 BEAM_TARGET_TX = 0x01
@@ -126,6 +127,7 @@ RESULT_NAMES = {
     RESULT_BAD_LENGTH: "BAD_LENGTH",
     RESULT_OUT_OF_RANGE: "OUT_OF_RANGE",
     RESULT_UNSUPPORTED: "UNSUPPORTED",
+    RESULT_PERSISTENCE_FAILED: "PERSISTENCE_FAILED",
 }
 
 
@@ -317,10 +319,10 @@ def ext_ref_valid(ref_mhz: int) -> bool:
         ref_mhz: 外部参考时钟频率。
 
     Returns:
-        10 MHz 或 100 MHz 时为 ``True``。
+        10 MHz 或 50 MHz 时为 ``True``。
     """
 
-    return ref_mhz in (10, 100)
+    return ref_mhz in (10, 50)
 
 
 def encode_frame(
@@ -677,7 +679,7 @@ def build_set_ext_ref(ref_mhz: int) -> bytes:
     """构建 ``0x15 SET_EXT_REF`` 帧。
 
     Args:
-        ref_mhz: 外部参考频率，仅支持 10 或 100 MHz。
+        ref_mhz: 外部参考频率，仅支持 10 或 50 MHz。
 
     Returns:
         完整 ``0x15`` 请求帧。
@@ -687,7 +689,7 @@ def build_set_ext_ref(ref_mhz: int) -> bytes:
     """
 
     if not ext_ref_valid(ref_mhz):
-        raise ValueError(f"外参仅支持 10 或 100 MHz，实际 {ref_mhz}")
+        raise ValueError(f"外参仅支持 10 或 50 MHz，实际 {ref_mhz}")
     return encode_frame(CMD_SET_EXT_REF, be16_write(ref_mhz))
 
 

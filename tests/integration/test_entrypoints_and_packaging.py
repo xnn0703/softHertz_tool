@@ -68,3 +68,15 @@ def test_build_cleanup_is_limited_to_regenerable_output_directories(tmp_path: Pa
     assert not pyinstaller_output.exists()
     assert not distribution_output.exists()
     assert (unrelated_build_output / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_build_version_sanitizes_plus_for_windows_filename(monkeypatch):
+    """``+`` 在 Windows PyInstaller 产物与 spec 文件名下兼容性差，转为 ``.``。"""
+    build_windows = _load_build_module()
+    monkeypatch.setenv("SOFTHERTZ_VERSION", "v3.1.4+dev")
+    assert build_windows._resolve_version() == "3.1.4.dev"
+    assert "+" not in build_windows._app_name(build_windows._resolve_version())
+
+    monkeypatch.setenv("SOFTHERTZ_VERSION", "v3.1.4")
+    assert build_windows._resolve_version() == "3.1.4"
+    assert build_windows._app_name(build_windows._resolve_version()) == "SoftHertz_Tool-3.1.4"

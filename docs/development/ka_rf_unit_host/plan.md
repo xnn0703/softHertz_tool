@@ -87,7 +87,7 @@ devices/ka_rf_unit.simulator   -> devices/ka_rf_unit.protocol
 - `0x12 SET_TX_EN` 开启后 PA 自动跟随；TX 关闭时 PA 关闭；
   UI 不构造第二份硬件事实。
 - `0x14 SET_BEAM` `target_mask` bit0=TX、bit1=RX，至少 1 位；波束码 0–4095。
-- `0x15 SET_EXT_REF` 仅支持 10/100 MHz。
+- `0x15 SET_EXT_REF` 仅支持 10/50 MHz。
 - `0x20 SET_REPORT_HZ` 0~200 Hz；0 表示关闭主动上报。
 - `0x30 STATUS_REPORT` 43 B payload；`conv_lock_mask` 关键三位 bit0/bit1/bit2
   分别表示 REF_VALID / RX_LO_LOCK / TX_LO_LOCK。

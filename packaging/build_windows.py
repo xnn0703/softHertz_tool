@@ -18,7 +18,10 @@ from pathlib import Path
 from PyInstaller.__main__ import run
 
 
-DEFAULT_DEV_VERSION = "0.0.0+dev"
+DEFAULT_DEV_VERSION = "0.0.0+dev"  # 解析时 ``+`` 转 ``.``，最终为 ``0.0.0.dev``。
+# 接受 ``[0-9A-Za-z._-]`` 字符；``+`` 视为合法的 PEP 440 后缀分隔符。
+# 文件名里用 ``.`` 替代 ``+``，避免 PyInstaller Windows bootloader / 某些
+# 通配工具在 ``+`` 上的兼容性差异。
 _FILENAME_SAFE_RE = re.compile(r"[^0-9A-Za-z._+-]")
 
 
@@ -26,13 +29,15 @@ def _resolve_version() -> str:
     """从 ``SOFTHERTZ_VERSION`` 环境变量解析构建版本。
 
     Returns:
-        已剥 ``v`` 前缀、仅含文件名安全字符的版本字符串。
+        已剥 ``v`` 前缀、含 ``[0-9A-Za-z._-]`` 的版本字符串。
     """
 
     raw = os.environ.get("SOFTHERTZ_VERSION") or DEFAULT_DEV_VERSION
     if raw.startswith("v") and len(raw) > 1:
         raw = raw[1:]
-    return _FILENAME_SAFE_RE.sub("-", raw) or DEFAULT_DEV_VERSION
+    safe = _FILENAME_SAFE_RE.sub(".", raw)
+    safe = safe.replace("+", ".")
+    return safe or DEFAULT_DEV_VERSION.replace("+", ".")
 
 
 def _app_name(version: str) -> str:

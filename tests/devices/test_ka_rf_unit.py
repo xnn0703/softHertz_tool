@@ -61,6 +61,10 @@ def test_builders_match_doc_samples():
             protocol.build_set_ext_ref(10),
             "50 53 41 01 15 02 00 0A 25 66",
         ),
+        "0x15_50": (
+            protocol.build_set_ext_ref(50),
+            "50 53 41 01 15 02 00 32 92 3D",
+        ),
         "0x20": (
             protocol.build_set_report_hz(50),
             "50 53 41 01 20 02 00 32 02 91",
@@ -81,8 +85,8 @@ def test_validators_enforce_protocol_ranges():
     assert not protocol.tx_lo_valid(26551)
     assert protocol.conv_att_valid(0) and protocol.conv_att_valid(315) and protocol.conv_att_valid(5)
     assert not protocol.conv_att_valid(1) and not protocol.conv_att_valid(316)
-    assert protocol.ext_ref_valid(10) and protocol.ext_ref_valid(100)
-    assert not protocol.ext_ref_valid(50)
+    assert protocol.ext_ref_valid(10) and protocol.ext_ref_valid(50)
+    assert not protocol.ext_ref_valid(100)
 
 
 def test_beam_builder_rejects_invalid_target_mask():
@@ -119,7 +123,7 @@ def test_status_report_decode_full_payload():
         tx_lo_mhz=28050,
         rx_conv_att_x10=125,
         tx_conv_att_x10=45,
-        ext_ref_mhz=100,
+        ext_ref_mhz=50,
         conv_temp_x10=350,
         tx_array_temp_x10=410,
         rx_array_temp_x10=405,

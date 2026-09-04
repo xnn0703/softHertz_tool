@@ -41,7 +41,7 @@ class KaRfUnitDeviceSimulator:
         self.tx_lo_mhz = 28050
         self.rx_att_x10 = 0
         self.tx_att_x10 = 0
-        self.ext_ref_mhz = 100
+        self.ext_ref_mhz = 10
         self.rx_polar = protocol.POLAR_RIGHT_CIRCLE
         self.tx_polar = protocol.POLAR_LEFT_CIRCLE
         self.tx_beam_h = 0
