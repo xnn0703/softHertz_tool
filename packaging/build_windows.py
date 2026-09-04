@@ -46,6 +46,12 @@ def _app_name(version: str) -> str:
     return f"SoftHertz_Tool-{version}"
 
 
+def _build_summary(version: str, app_name: str) -> str:
+    """返回可在 Windows 非 UTF-8 控制台安全输出的构建摘要。"""
+
+    return f"Build version: {version} -> artifact: {app_name}"
+
+
 def _project_directory() -> Path:
     """定位包含 ``pyproject.toml`` 的仓库根目录。
 
@@ -127,7 +133,7 @@ def main() -> None:
     version = _resolve_version()
     app_name = _app_name(version)
     _clean_build_outputs(project_dir)
-    print(f"构建版本: {version} -> 产物: {app_name}")
+    print(_build_summary(version, app_name))
     run(_pyinstaller_arguments(project_dir, app_name))
 
 

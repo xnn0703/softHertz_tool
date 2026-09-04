@@ -80,3 +80,11 @@ def test_build_version_sanitizes_plus_for_windows_filename(monkeypatch):
     monkeypatch.setenv("SOFTHERTZ_VERSION", "v3.1.4")
     assert build_windows._resolve_version() == "3.1.4"
     assert build_windows._app_name(build_windows._resolve_version()) == "SoftHertz_Tool-3.1.4"
+
+
+def test_build_summary_is_safe_for_windows_cp1252_console():
+    """构建日志不得在 GitHub Windows runner 的 cp1252 stdout 上编码失败。"""
+    build_windows = _load_build_module()
+    summary = build_windows._build_summary("3.1.3", "SoftHertz_Tool-3.1.3")
+
+    assert summary.encode("cp1252") == b"Build version: 3.1.3 -> artifact: SoftHertz_Tool-3.1.3"
