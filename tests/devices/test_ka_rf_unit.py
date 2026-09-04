@@ -334,6 +334,36 @@ def test_driver_queue_frame_uses_send_bytes(qt_app):
     assert len(spy._sent) == 2
 
 
+def test_panel_apply_freq_sends_default_0x10_values(qt_app):
+    """0x10 页面回调应完成 LO 解析并进入 Driver 语义发送接口。"""
+
+    class _SpyDriver(QObject):
+        def __init__(self) -> None:
+            super().__init__()
+            self.running = True
+            self.calls: list[tuple[int, int, int, int, int, int]] = []
+
+        def set_conv_freq(
+            self,
+            rx_rf_mhz: int,
+            rx_lo_mhz: int,
+            tx_rf_mhz: int,
+            tx_lo_mhz: int,
+            rx_polar: int,
+            tx_polar: int,
+        ) -> bool:
+            self.calls.append((rx_rf_mhz, rx_lo_mhz, tx_rf_mhz, tx_lo_mhz, rx_polar, tx_polar))
+            return True
+
+    panel = KaRfUnitPanel()
+    spy = _SpyDriver()
+    panel._driver = spy  # type: ignore[assignment]
+
+    panel._apply_freq()
+
+    assert spy.calls == [(19966, 0, 29500, 0, 0, 0)]
+
+
 # ---------------------------------------------------------------------------
 # Simulator
 # ---------------------------------------------------------------------------

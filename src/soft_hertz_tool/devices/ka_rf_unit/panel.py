@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from soft_hertz_tool.devices.ka_rf_unit import protocol
@@ -104,31 +105,49 @@ class KaRfUnitPanel(QFrame):
         self._connection_generation = 0
         self._latest_status: Optional[Dict[str, object]] = None
         self._last_status_time = 0.0
-        self._row_index: Dict[str, int] = {}
+        self._row_index: Dict[str, Tuple[int, int]] = {}
 
         self.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(1180)
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        """组装串口、命令、状态和日志区域。"""
-        layout = QVBoxLayout(self)
+        """组装紧凑的串口、命令、状态、扫描和日志区域。
 
-        self.title_label = QLabel("KA_RF_UNIT")
-        self.title_label.setObjectName("panelTitle")
-        self.title_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.title_label)
+        设备型号已由工作区顶部下拉框呈现，因此不重复占用标题行。命令区左列为
+        频点与常用控制，右列为波束与扫描；0x30 以三组字段/值并列显示。
+        """
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setSpacing(6)
 
-        layout.addWidget(self._create_serial_group())
-        layout.addWidget(self._create_freq_group())
-        layout.addWidget(self._create_att_group())
-        layout.addWidget(self._create_en_group())
-        layout.addWidget(self._create_beam_group())
-        layout.addWidget(self._create_extref_report_group())
-        layout.addWidget(self._create_status_group())
-        layout.addWidget(self._create_scan_group())
-        layout.addWidget(self._create_log_group())
-        layout.addStretch()
+        outer.addWidget(self._create_serial_group())
+
+        # 命令区：左右两列；左侧两组固定紧凑，右侧波束和扫描保持同宽网格。
+        columns = QHBoxLayout()
+        columns.setContentsMargins(0, 0, 0, 0)
+        columns.setSpacing(6)
+        left_col = QWidget()
+        left_layout = QVBoxLayout(left_col)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(6)
+        left_layout.addWidget(self._create_freq_group())
+        left_layout.addWidget(self._create_common_control_group())
+        left_layout.addStretch()
+        right_col = QWidget()
+        right_layout = QVBoxLayout(right_col)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(6)
+        right_layout.addWidget(self._create_beam_group())
+        right_layout.addWidget(self._create_scan_group())
+        right_layout.addStretch()
+        columns.addWidget(left_col, 1)
+        columns.addWidget(right_col, 1)
+        outer.addLayout(columns)
+
+        outer.addWidget(self._create_status_group())
+        outer.addWidget(self._create_log_group())
+        outer.addStretch()
 
         self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self._refresh_status_table)
@@ -157,232 +176,299 @@ class KaRfUnitPanel(QFrame):
         return group
 
     def _create_freq_group(self) -> QGroupBox:
-        """创建 0x10 频点与极化控件。"""
+        """创建 0x10 频点与极化控件（2 行：RX 一行，TX 一行；右侧"设置"按钮独占列）。"""
         group = QGroupBox("0x10 频点与极化配置")
         grid = QGridLayout(group)
-        grid.addWidget(QLabel("RX RF (MHz)"), 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+        grid.setContentsMargins(8, 8, 8, 8)
+        # 公共：标签 / RF / 标签 / LO / 标签 / 极化 / 占位 / 设置
+        for col in (0, 2, 4):
+            grid.setColumnStretch(col, 0)
+        for col in (1, 3, 5):
+            grid.setColumnStretch(col, 1)
+        # RX 行
+        grid.addWidget(self._field_label("RX RF (MHz)"), 0, 0)
         self.rx_rf = self._int_spin(19966, 17700, 21200)
+        self.rx_rf.setMaximumWidth(96)
         grid.addWidget(self.rx_rf, 0, 1)
-        grid.addWidget(QLabel("RX LO (MHz，留空=AUTO)"), 0, 2)
+        grid.addWidget(self._field_label("RX LO"), 0, 2)
         self.rx_lo = QLineEdit()
         self.rx_lo.setPlaceholderText("AUTO")
+        self.rx_lo.setMaximumWidth(80)
         grid.addWidget(self.rx_lo, 0, 3)
-        grid.addWidget(QLabel("RX 极化"), 0, 4)
+        grid.addWidget(self._field_label("RX 极化"), 0, 4)
         self.rx_polar = QComboBox()
         for label, value in POLAR_OPTIONS:
             self.rx_polar.addItem(label, value)
+        self.rx_polar.setMaximumWidth(96)
         grid.addWidget(self.rx_polar, 0, 5)
-
-        grid.addWidget(QLabel("TX RF (MHz)"), 1, 0)
+        # TX 行
+        grid.addWidget(self._field_label("TX RF (MHz)"), 1, 0)
         self.tx_rf = self._int_spin(29500, 27500, 31000)
+        self.tx_rf.setMaximumWidth(96)
         grid.addWidget(self.tx_rf, 1, 1)
-        grid.addWidget(QLabel("TX LO (MHz，留空=AUTO)"), 1, 2)
+        grid.addWidget(self._field_label("TX LO"), 1, 2)
         self.tx_lo = QLineEdit()
         self.tx_lo.setPlaceholderText("AUTO")
+        self.tx_lo.setMaximumWidth(80)
         grid.addWidget(self.tx_lo, 1, 3)
-        grid.addWidget(QLabel("TX 极化"), 1, 4)
+        grid.addWidget(self._field_label("TX 极化"), 1, 4)
         self.tx_polar = QComboBox()
         for label, value in POLAR_OPTIONS:
             self.tx_polar.addItem(label, value)
+        self.tx_polar.setMaximumWidth(96)
         grid.addWidget(self.tx_polar, 1, 5)
-
+        # 右侧"设置"按钮独占 2 行
         apply = QPushButton("设置")
         apply.clicked.connect(self._apply_freq)
-        grid.addWidget(apply, 0, 6, 2, 1)
+        apply.setMinimumWidth(72)
+        grid.addWidget(apply, 0, 7, 2, 1)
+        # 列 6 作为中间留白列
+        grid.setColumnStretch(6, 1)
         return group
 
-    def _create_att_group(self) -> QGroupBox:
-        """创建 0x11 衰减控件。"""
-        group = QGroupBox("0x11 变频衰减 (0.0~31.5 dB，步进 0.5)")
-        row = QHBoxLayout(group)
-        row.addWidget(QLabel("RX 衰减 (dB)"))
+    def _create_common_control_group(self) -> QGroupBox:
+        """创建衰减、阵列使能、外参与上报频率的三行紧凑控制区。"""
+        group = QGroupBox("0x11 / 0x12 / 0x13 / 0x15 / 0x20 常用控制")
+        grid = QGridLayout(group)
+        grid.setContentsMargins(8, 8, 8, 8)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+
+        # 第 0 行：0x11 变频衰减
+        grid.addWidget(self._field_label("RX 衰减(dB)"), 0, 0)
         self.rx_att = QDoubleSpinBox()
         self.rx_att.setRange(0.0, 31.5)
         self.rx_att.setDecimals(1)
         self.rx_att.setSingleStep(0.5)
         self.rx_att.setValue(0.0)
-        row.addWidget(self.rx_att)
-        row.addWidget(QLabel("TX 衰减 (dB)"))
+        self.rx_att.setMaximumWidth(96)
+        grid.addWidget(self.rx_att, 0, 1)
+        grid.addWidget(self._field_label("TX 衰减(dB)"), 0, 2)
         self.tx_att = QDoubleSpinBox()
         self.tx_att.setRange(0.0, 31.5)
         self.tx_att.setDecimals(1)
         self.tx_att.setSingleStep(0.5)
         self.tx_att.setValue(0.0)
-        row.addWidget(self.tx_att)
-        apply = QPushButton("设置")
-        apply.clicked.connect(self._apply_att)
-        row.addWidget(apply)
-        row.addStretch()
-        return group
+        self.tx_att.setMaximumWidth(96)
+        grid.addWidget(self.tx_att, 0, 3)
+        att_apply = QPushButton("设置衰减")
+        att_apply.setMinimumWidth(80)
+        att_apply.clicked.connect(self._apply_att)
+        grid.addWidget(att_apply, 0, 4)
 
-    def _create_en_group(self) -> QGroupBox:
-        """创建 0x12/0x13 阵列使能控件。"""
-        group = QGroupBox("0x12/0x13 阵列使能")
-        row = QHBoxLayout(group)
+        # 第 1 行：0x12/0x13 阵列使能
+        grid.addWidget(self._field_label("TX 阵列"), 1, 0)
         self.tx_en = QComboBox()
         for label, value in ENABLE_OPTIONS:
             self.tx_en.addItem(label, value)
+        self.tx_en.setMaximumWidth(80)
+        grid.addWidget(self.tx_en, 1, 1)
         tx_apply = QPushButton("设置 TX")
+        tx_apply.setMinimumWidth(80)
         tx_apply.clicked.connect(lambda: self._apply_en("TX"))
+        grid.addWidget(tx_apply, 1, 2)
+        grid.addWidget(self._field_label("RX 阵列"), 1, 3)
         self.rx_en = QComboBox()
         for label, value in ENABLE_OPTIONS:
             self.rx_en.addItem(label, value)
+        self.rx_en.setMaximumWidth(80)
+        grid.addWidget(self.rx_en, 1, 4)
         rx_apply = QPushButton("设置 RX")
+        rx_apply.setMinimumWidth(80)
         rx_apply.clicked.connect(lambda: self._apply_en("RX"))
-        row.addWidget(QLabel("TX 阵列"))
-        row.addWidget(self.tx_en)
-        row.addWidget(tx_apply)
-        row.addSpacing(16)
-        row.addWidget(QLabel("RX 阵列"))
-        row.addWidget(self.rx_en)
-        row.addWidget(rx_apply)
-        row.addStretch()
-        return group
+        grid.addWidget(rx_apply, 1, 5)
 
-    def _create_beam_group(self) -> QGroupBox:
-        """创建 0x14 波束控件。"""
-        group = QGroupBox("0x14 波束配置 (Raw 码 0~4095)")
-        grid = QGridLayout(group)
-        grid.addWidget(QLabel("目标"), 0, 0)
-        self.beam_tx_check = QCheckBox("TX (bit0)")
-        self.beam_rx_check = QCheckBox("RX (bit1)")
-        grid.addWidget(self.beam_tx_check, 0, 1)
-        grid.addWidget(self.beam_rx_check, 0, 2)
-
-        grid.addWidget(QLabel("TX BeamH"), 1, 0)
-        self.tx_beam_h = self._int_spin(0, 0, protocol.BEAM_CODE_MAX)
-        grid.addWidget(self.tx_beam_h, 1, 1)
-        grid.addWidget(QLabel("TX BeamV"), 1, 2)
-        self.tx_beam_v = self._int_spin(0, 0, protocol.BEAM_CODE_MAX)
-        grid.addWidget(self.tx_beam_v, 1, 3)
-
-        grid.addWidget(QLabel("RX BeamH"), 2, 0)
-        self.rx_beam_h = self._int_spin(0, 0, protocol.BEAM_CODE_MAX)
-        grid.addWidget(self.rx_beam_h, 2, 1)
-        grid.addWidget(QLabel("RX BeamV"), 2, 2)
-        self.rx_beam_v = self._int_spin(0, 0, protocol.BEAM_CODE_MAX)
-        grid.addWidget(self.rx_beam_v, 2, 3)
-
-        apply = QPushButton("设置波束")
-        apply.clicked.connect(self._apply_beam)
-        grid.addWidget(apply, 0, 4, 3, 1)
-        return group
-
-    def _create_extref_report_group(self) -> QGroupBox:
-        """创建 0x15/0x20 外参与上报频率控件。"""
-        group = QGroupBox("0x15 外参 / 0x20 主动上报频率")
-        row = QHBoxLayout(group)
-        row.addWidget(QLabel("外参时钟"))
+        # 第 2 行：0x15 外参 / 0x20 主动上报频率
+        grid.addWidget(self._field_label("外参"), 2, 0)
         self.ext_ref = QComboBox()
         for label, value in EXT_REF_OPTIONS:
             self.ext_ref.addItem(label, value)
-        row.addWidget(self.ext_ref)
-        ext_apply = QPushButton("设置")
+        self.ext_ref.setMaximumWidth(96)
+        grid.addWidget(self.ext_ref, 2, 1)
+        ext_apply = QPushButton("设置外参")
+        ext_apply.setMinimumWidth(80)
         ext_apply.clicked.connect(self._apply_ext_ref)
-        row.addWidget(ext_apply)
-        row.addSpacing(16)
-        row.addWidget(QLabel("上报频率 (Hz，0=关闭)"))
+        grid.addWidget(ext_apply, 2, 2)
+        grid.addWidget(self._field_label("上报(Hz, 0=关)"), 2, 3)
         self.report_hz = self._int_spin(50, 0, 200)
-        row.addWidget(self.report_hz)
-        report_apply = QPushButton("设置")
+        self.report_hz.setMaximumWidth(80)
+        grid.addWidget(self.report_hz, 2, 4)
+        report_apply = QPushButton("设置上报")
+        report_apply.setMinimumWidth(80)
         report_apply.clicked.connect(self._apply_report_hz)
-        row.addWidget(report_apply)
-        row.addStretch()
+        grid.addWidget(report_apply, 2, 5)
+
+        for col in (1, 4):
+            grid.setColumnStretch(col, 1)
+        return group
+
+    def _create_beam_group(self) -> QGroupBox:
+        """创建 0x14 波束控件（目标一行 + BeamH 一行 + BeamV 一行 + 设置按钮独占列）。"""
+        group = QGroupBox("0x14 波束配置 (Raw 码 0~4095)")
+        grid = QGridLayout(group)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+        grid.setContentsMargins(8, 8, 8, 8)
+        # 列：标签 / TX / 标签 / RX / 占位 / 设置按钮
+        for col in (0, 2):
+            grid.setColumnStretch(col, 0)
+        for col in (1, 3):
+            grid.setColumnStretch(col, 1)
+        # 第 0 行：目标 / TX(bit0) / RX(bit1)
+        grid.addWidget(self._field_label("目标"), 0, 0)
+        self.beam_tx_check = QCheckBox("TX (bit0)")
+        self.beam_rx_check = QCheckBox("RX (bit1)")
+        target_row = QHBoxLayout()
+        target_row.setContentsMargins(0, 0, 0, 0)
+        target_row.setSpacing(12)
+        target_row.addWidget(self.beam_tx_check)
+        target_row.addWidget(self.beam_rx_check)
+        target_row.addStretch()
+        target_widget = QWidget()
+        target_widget.setLayout(target_row)
+        grid.addWidget(target_widget, 0, 1, 1, 3)
+        # 第 1 行：TX BeamH / RX BeamH
+        self.tx_beam_h = self._int_spin(0, 0, protocol.BEAM_CODE_MAX)
+        self.tx_beam_h.setMaximumWidth(80)
+        self.rx_beam_h = self._int_spin(0, 0, protocol.BEAM_CODE_MAX)
+        self.rx_beam_h.setMaximumWidth(80)
+        grid.addWidget(self._field_label("TX BeamH"), 1, 0)
+        grid.addWidget(self.tx_beam_h, 1, 1)
+        grid.addWidget(self._field_label("RX BeamH"), 1, 2)
+        grid.addWidget(self.rx_beam_h, 1, 3)
+        # 第 2 行：TX BeamV / RX BeamV
+        self.tx_beam_v = self._int_spin(0, 0, protocol.BEAM_CODE_MAX)
+        self.tx_beam_v.setMaximumWidth(80)
+        self.rx_beam_v = self._int_spin(0, 0, protocol.BEAM_CODE_MAX)
+        self.rx_beam_v.setMaximumWidth(80)
+        grid.addWidget(self._field_label("TX BeamV"), 2, 0)
+        grid.addWidget(self.tx_beam_v, 2, 1)
+        grid.addWidget(self._field_label("RX BeamV"), 2, 2)
+        grid.addWidget(self.rx_beam_v, 2, 3)
+        # 右侧"设置波束"按钮跨 3 行
+        apply = QPushButton("设置波束")
+        apply.setMinimumWidth(96)
+        apply.clicked.connect(self._apply_beam)
+        grid.addWidget(apply, 0, 5, 3, 1)
+        grid.setColumnStretch(4, 1)
         return group
 
     def _create_status_group(self) -> QGroupBox:
-        """创建 0x30 状态上报显示表格。"""
+        """创建 0x30 状态表：字段/值 × 3 块，23 项在 8 行内规整显示。"""
         group = QGroupBox("0x30 状态上报 (10 Hz 刷新)")
         layout = QVBoxLayout(group)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
         self.status_meta = QLabel("上次上报: -- | 距离上次: --")
         layout.addWidget(self.status_meta)
-        self.status_table = QTableWidget(len(STATUS_REPORT_ROWS), 2)
-        self.status_table.setHorizontalHeaderLabels(["字段", "值"])
+        rows_total = len(STATUS_REPORT_ROWS)
+        status_blocks = 3
+        self._status_layout_columns = (rows_total + status_blocks - 1) // status_blocks  # 8
+        self.status_table = QTableWidget(self._status_layout_columns, status_blocks * 2)
+        self.status_table.setHorizontalHeaderLabels(["字段", "值"] * status_blocks)
         self.status_table.verticalHeader().setVisible(False)
         self.status_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.status_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.status_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        for row, (key, label) in enumerate(STATUS_REPORT_ROWS):
-            self._row_index[key] = row
-            self.status_table.setItem(row, 0, QTableWidgetItem(label))
-            self.status_table.setItem(row, 1, QTableWidgetItem("--"))
+        self.status_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.status_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.status_table.horizontalHeader().setFixedHeight(22)
+        self.status_table.verticalHeader().setDefaultSectionSize(22)
+        for col in range(0, status_blocks * 2, 2):
+            self.status_table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        for col in range(1, status_blocks * 2, 2):
+            self.status_table.horizontalHeader().setSectionResizeMode(col, QHeaderView.Stretch)
+        for index, (key, label) in enumerate(STATUS_REPORT_ROWS):
+            row = index % self._status_layout_columns
+            label_col = (index // self._status_layout_columns) * 2
+            self._row_index[key] = (row, label_col + 1)
+            self.status_table.setItem(row, label_col, QTableWidgetItem(label))
+            self.status_table.setItem(row, label_col + 1, QTableWidgetItem("--"))
+        self.status_table.setFixedHeight(22 + self._status_layout_columns * 22 + 2)
         layout.addWidget(self.status_table)
         return group
 
     def _create_scan_group(self) -> QGroupBox:
-        """创建波束扫描控件：起止角度、步进、间隔、控制按钮与状态显示。"""
+        """创建波束扫描控件：6 列网格 + 单行按钮 + 状态。"""
         group = QGroupBox("波束扫描 (θ 离轴 0~90°，φ 方位 0~360°)")
         layout = QVBoxLayout(group)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
 
         grid = QGridLayout()
-        grid.addWidget(QLabel("θ 起始 (°)"), 0, 0)
-        self.scan_theta_start = QDoubleSpinBox()
-        self.scan_theta_start.setRange(0.0, 90.0)
-        self.scan_theta_start.setDecimals(1)
-        self.scan_theta_start.setSingleStep(0.5)
-        self.scan_theta_start.setValue(0.0)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(4)
+
+        def _spin(min_val, max_val, value, step, decimals=1, max_width=80):
+            """扫描组用紧凑浮点输入框。"""
+            sb = QDoubleSpinBox()
+            sb.setRange(min_val, max_val)
+            sb.setDecimals(decimals)
+            sb.setSingleStep(step)
+            sb.setValue(value)
+            sb.setMaximumWidth(max_width)
+            return sb
+
+        def _intspin(min_val, max_val, value, step=1, max_width=80):
+            """扫描组用紧凑整数输入框。"""
+            sb = QSpinBox()
+            sb.setRange(min_val, max_val)
+            sb.setValue(value)
+            sb.setSingleStep(step)
+            sb.setMaximumWidth(max_width)
+            return sb
+
+        # 第 0 行：θ 起始 / 终止 / 步进
+        grid.addWidget(self._field_label("θ 起"), 0, 0)
+        self.scan_theta_start = _spin(0.0, 90.0, 0.0, 0.5)
         grid.addWidget(self.scan_theta_start, 0, 1)
-        grid.addWidget(QLabel("θ 终止 (°)"), 0, 2)
-        self.scan_theta_end = QDoubleSpinBox()
-        self.scan_theta_end.setRange(0.0, 90.0)
-        self.scan_theta_end.setDecimals(1)
-        self.scan_theta_end.setSingleStep(0.5)
-        self.scan_theta_end.setValue(30.0)
+        grid.addWidget(self._field_label("θ 止"), 0, 2)
+        self.scan_theta_end = _spin(0.0, 90.0, 30.0, 0.5)
         grid.addWidget(self.scan_theta_end, 0, 3)
-        grid.addWidget(QLabel("θ 步进 (°)"), 0, 4)
-        self.scan_theta_step = QDoubleSpinBox()
-        self.scan_theta_step.setRange(0.1, 90.0)
-        self.scan_theta_step.setDecimals(1)
-        self.scan_theta_step.setSingleStep(0.1)
-        self.scan_theta_step.setValue(5.0)
+        grid.addWidget(self._field_label("θ 步"), 0, 4)
+        self.scan_theta_step = _spin(0.1, 90.0, 5.0, 0.1)
         grid.addWidget(self.scan_theta_step, 0, 5)
-
-        grid.addWidget(QLabel("φ 起始 (°)"), 1, 0)
-        self.scan_phi_start = QDoubleSpinBox()
-        self.scan_phi_start.setRange(0.0, 360.0)
-        self.scan_phi_start.setDecimals(1)
-        self.scan_phi_start.setSingleStep(1.0)
-        self.scan_phi_start.setValue(0.0)
+        # 第 1 行：φ 起始 / 终止 / 步进
+        grid.addWidget(self._field_label("φ 起"), 1, 0)
+        self.scan_phi_start = _spin(0.0, 360.0, 0.0, 1.0)
         grid.addWidget(self.scan_phi_start, 1, 1)
-        grid.addWidget(QLabel("φ 终止 (°)"), 1, 2)
-        self.scan_phi_end = QDoubleSpinBox()
-        self.scan_phi_end.setRange(0.0, 360.0)
-        self.scan_phi_end.setDecimals(1)
-        self.scan_phi_end.setSingleStep(1.0)
-        self.scan_phi_end.setValue(90.0)
+        grid.addWidget(self._field_label("φ 止"), 1, 2)
+        self.scan_phi_end = _spin(0.0, 360.0, 90.0, 1.0)
         grid.addWidget(self.scan_phi_end, 1, 3)
-        grid.addWidget(QLabel("φ 步进 (°)"), 1, 4)
-        self.scan_phi_step = QDoubleSpinBox()
-        self.scan_phi_step.setRange(0.1, 360.0)
-        self.scan_phi_step.setDecimals(1)
-        self.scan_phi_step.setSingleStep(0.1)
-        self.scan_phi_step.setValue(10.0)
+        grid.addWidget(self._field_label("φ 步"), 1, 4)
+        self.scan_phi_step = _spin(0.1, 360.0, 10.0, 0.1)
         grid.addWidget(self.scan_phi_step, 1, 5)
-
-        grid.addWidget(QLabel("间隔 (ms)"), 2, 0)
-        self.scan_interval_ms = QSpinBox()
-        self.scan_interval_ms.setRange(1, 60000)
-        self.scan_interval_ms.setValue(200)
-        self.scan_interval_ms.setSingleStep(50)
+        # 第 2 行：间隔 / 频点来源
+        grid.addWidget(self._field_label("间隔 (ms)"), 2, 0)
+        self.scan_interval_ms = _intspin(1, 60000, 200, 50)
         grid.addWidget(self.scan_interval_ms, 2, 1)
-        grid.addWidget(QLabel("频点来源"), 2, 2)
+        grid.addWidget(self._field_label("频点"), 2, 2)
         self.scan_freq_source = QComboBox()
-        self.scan_freq_source.addItem("STATUS_REPORT 当前 RF", "auto")
-        self.scan_freq_source.addItem("手动输入", "manual")
+        self.scan_freq_source.addItem("STATUS", "auto")
+        self.scan_freq_source.addItem("手动", "manual")
         grid.addWidget(self.scan_freq_source, 2, 3)
-        grid.addWidget(QLabel("手动 TX/MHz"), 3, 0)
+        # 第 3 行：手动 TX / RX 频点
+        grid.addWidget(self._field_label("TX (MHz)"), 3, 0)
         self.scan_tx_rf = QSpinBox()
         self.scan_tx_rf.setRange(protocol.TX_RF_MIN_MHZ, protocol.TX_RF_MAX_MHZ)
         self.scan_tx_rf.setValue(29500)
+        self.scan_tx_rf.setMaximumWidth(96)
         grid.addWidget(self.scan_tx_rf, 3, 1)
-        grid.addWidget(QLabel("手动 RX/MHz"), 3, 2)
+        grid.addWidget(self._field_label("RX (MHz)"), 3, 2)
         self.scan_rx_rf = QSpinBox()
         self.scan_rx_rf.setRange(protocol.RX_RF_MIN_MHZ, protocol.RX_RF_MAX_MHZ)
         self.scan_rx_rf.setValue(19966)
+        self.scan_rx_rf.setMaximumWidth(96)
         grid.addWidget(self.scan_rx_rf, 3, 3)
+        # 频点来源切换控制 (auto/manual) 时启用/禁用手动频点
+        self.scan_freq_source.currentIndexChanged.connect(self._on_scan_freq_source_changed)
+        self._on_scan_freq_source_changed()
+
         layout.addLayout(grid)
 
+        # 单行按钮 + 进度 + 状态
         button_row = QHBoxLayout()
+        button_row.setSpacing(6)
         self.scan_start_btn = QPushButton("开始")
         self.scan_start_btn.clicked.connect(self._on_scan_start)
         self.scan_pause_btn = QPushButton("暂停")
@@ -394,30 +480,35 @@ class KaRfUnitPanel(QFrame):
         button_row.addWidget(self.scan_start_btn)
         button_row.addWidget(self.scan_pause_btn)
         button_row.addWidget(self.scan_stop_btn)
-        button_row.addStretch()
-        layout.addLayout(button_row)
-
-        status_row = QHBoxLayout()
         self.scan_progress = QProgressBar()
         self.scan_progress.setRange(0, 1)
         self.scan_progress.setValue(0)
-        status_row.addWidget(self.scan_progress, 2)
-        self.scan_status_label = QLabel("拍数 0/0 | 跳过 0 | 当前 θ=-- φ=--")
-        self.scan_status_label.setMinimumWidth(220)
-        status_row.addWidget(self.scan_status_label, 3)
-        layout.addLayout(status_row)
+        self.scan_progress.setMaximumWidth(220)
+        button_row.addWidget(self.scan_progress, 1)
+        self.scan_status_label = QLabel("拍数 0/0 | 跳过 0 | θ=-- φ=--")
+        self.scan_status_label.setMinimumWidth(180)
+        button_row.addWidget(self.scan_status_label, 2)
+        layout.addLayout(button_row)
         return group
 
+    def _on_scan_freq_source_changed(self) -> None:
+        """手动模式时启用 TX/RX 频点输入，自动模式时禁用并清空回退到 STATUS。"""
+        manual = self.scan_freq_source.currentData() == "manual"
+        self.scan_tx_rf.setEnabled(manual)
+        self.scan_rx_rf.setEnabled(manual)
+
     def _create_log_group(self) -> QGroupBox:
-        """创建仅显示当前页面 Driver 日志的控件。"""
+        """创建紧凑的当前页面 Driver 日志控件。"""
         group = QGroupBox("日志")
-        layout = QVBoxLayout(group)
+        layout = QHBoxLayout(group)
+        layout.setContentsMargins(8, 8, 8, 8)
         self.log_text = QPlainTextEdit()
-        self.log_text.setMaximumHeight(120)
+        self.log_text.setFixedHeight(64)
         self.log_text.setReadOnly(True)
         clear = QPushButton("清除")
         clear.clicked.connect(self.log_text.clear)
-        layout.addWidget(self.log_text)
+        clear.setMinimumWidth(72)
+        layout.addWidget(self.log_text, 1)
         layout.addWidget(clear)
         return group
 
@@ -437,6 +528,14 @@ class KaRfUnitPanel(QFrame):
         widget.setRange(minimum, maximum)
         widget.setValue(value)
         return widget
+
+    @staticmethod
+    def _field_label(text: str) -> QLabel:
+        """生成字段标签，统一最小宽度，避免 GridLayout 拉伸到内容宽度。"""
+        label = QLabel(text)
+        label.setMinimumWidth(86)
+        label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        return label
 
     def _parse_lo(self, edit: QLineEdit, *, label: str) -> int:
         """解析 LO 输入：空串=0/AUTO；否则必须是协议偶数 MHz。
@@ -618,8 +717,8 @@ class KaRfUnitPanel(QFrame):
 
         def action(driver: KaRfUnitDriver) -> bool:
             """在 Driver 上发送 0x10 频点与极化配置。"""
-            rx_lo = self._parse_lo(self.rx_lo, "RX LO")
-            tx_lo = self._parse_lo(self.tx_lo, "TX LO")
+            rx_lo = self._parse_lo(self.rx_lo, label="RX LO")
+            tx_lo = self._parse_lo(self.tx_lo, label="TX LO")
             return driver.set_conv_freq(
                 self.rx_rf.value(),
                 rx_lo,
@@ -971,10 +1070,10 @@ class KaRfUnitPanel(QFrame):
         status = self._latest_status
         if not status:
             return
-        for key, row in self._row_index.items():
+        for key, (row, col_value) in self._row_index.items():
             if key not in status:
                 continue
-            self.status_table.item(row, 1).setText(
+            self.status_table.item(row, col_value).setText(
                 self._format_status_value(key, status[key])
             )
 
