@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Tuple
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSpinBox,
     QTableWidget,
@@ -125,11 +126,22 @@ class KaRfUnitPanel(QFrame):
         layout.addWidget(self._create_beam_group())
         layout.addWidget(self._create_extref_report_group())
         layout.addWidget(self._create_status_group())
+        layout.addWidget(self._create_scan_group())
         layout.addWidget(self._create_log_group())
         layout.addStretch()
 
         self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self._refresh_status_table)
+
+        self._scan_timer = QTimer(self)
+        self._scan_timer.setSingleShot(True)
+        self._scan_timer.timeout.connect(self._scan_tick)
+        self._scan_state = "IDLE"  # IDLE / RUNNING / PAUSED / FINISHED
+        self._scan_total = 0
+        self._scan_index = 0
+        self._scan_current_theta = 0.0
+        self._scan_current_phi = 0.0
+        self._scan_skipped = 0
 
     def _create_serial_group(self) -> QGroupBox:
         """创建串口连接栏与上报频率指示。"""
@@ -295,6 +307,105 @@ class KaRfUnitPanel(QFrame):
             self.status_table.setItem(row, 0, QTableWidgetItem(label))
             self.status_table.setItem(row, 1, QTableWidgetItem("--"))
         layout.addWidget(self.status_table)
+        return group
+
+    def _create_scan_group(self) -> QGroupBox:
+        """创建波束扫描控件：起止角度、步进、间隔、控制按钮与状态显示。"""
+        group = QGroupBox("波束扫描 (θ 离轴 0~90°，φ 方位 0~360°)")
+        layout = QVBoxLayout(group)
+
+        grid = QGridLayout()
+        grid.addWidget(QLabel("θ 起始 (°)"), 0, 0)
+        self.scan_theta_start = QDoubleSpinBox()
+        self.scan_theta_start.setRange(0.0, 90.0)
+        self.scan_theta_start.setDecimals(1)
+        self.scan_theta_start.setSingleStep(0.5)
+        self.scan_theta_start.setValue(0.0)
+        grid.addWidget(self.scan_theta_start, 0, 1)
+        grid.addWidget(QLabel("θ 终止 (°)"), 0, 2)
+        self.scan_theta_end = QDoubleSpinBox()
+        self.scan_theta_end.setRange(0.0, 90.0)
+        self.scan_theta_end.setDecimals(1)
+        self.scan_theta_end.setSingleStep(0.5)
+        self.scan_theta_end.setValue(30.0)
+        grid.addWidget(self.scan_theta_end, 0, 3)
+        grid.addWidget(QLabel("θ 步进 (°)"), 0, 4)
+        self.scan_theta_step = QDoubleSpinBox()
+        self.scan_theta_step.setRange(0.1, 90.0)
+        self.scan_theta_step.setDecimals(1)
+        self.scan_theta_step.setSingleStep(0.1)
+        self.scan_theta_step.setValue(5.0)
+        grid.addWidget(self.scan_theta_step, 0, 5)
+
+        grid.addWidget(QLabel("φ 起始 (°)"), 1, 0)
+        self.scan_phi_start = QDoubleSpinBox()
+        self.scan_phi_start.setRange(0.0, 360.0)
+        self.scan_phi_start.setDecimals(1)
+        self.scan_phi_start.setSingleStep(1.0)
+        self.scan_phi_start.setValue(0.0)
+        grid.addWidget(self.scan_phi_start, 1, 1)
+        grid.addWidget(QLabel("φ 终止 (°)"), 1, 2)
+        self.scan_phi_end = QDoubleSpinBox()
+        self.scan_phi_end.setRange(0.0, 360.0)
+        self.scan_phi_end.setDecimals(1)
+        self.scan_phi_end.setSingleStep(1.0)
+        self.scan_phi_end.setValue(90.0)
+        grid.addWidget(self.scan_phi_end, 1, 3)
+        grid.addWidget(QLabel("φ 步进 (°)"), 1, 4)
+        self.scan_phi_step = QDoubleSpinBox()
+        self.scan_phi_step.setRange(0.1, 360.0)
+        self.scan_phi_step.setDecimals(1)
+        self.scan_phi_step.setSingleStep(0.1)
+        self.scan_phi_step.setValue(10.0)
+        grid.addWidget(self.scan_phi_step, 1, 5)
+
+        grid.addWidget(QLabel("间隔 (ms)"), 2, 0)
+        self.scan_interval_ms = QSpinBox()
+        self.scan_interval_ms.setRange(1, 60000)
+        self.scan_interval_ms.setValue(200)
+        self.scan_interval_ms.setSingleStep(50)
+        grid.addWidget(self.scan_interval_ms, 2, 1)
+        grid.addWidget(QLabel("频点来源"), 2, 2)
+        self.scan_freq_source = QComboBox()
+        self.scan_freq_source.addItem("STATUS_REPORT 当前 RF", "auto")
+        self.scan_freq_source.addItem("手动输入", "manual")
+        grid.addWidget(self.scan_freq_source, 2, 3)
+        grid.addWidget(QLabel("手动 TX/MHz"), 3, 0)
+        self.scan_tx_rf = QSpinBox()
+        self.scan_tx_rf.setRange(protocol.TX_RF_MIN_MHZ, protocol.TX_RF_MAX_MHZ)
+        self.scan_tx_rf.setValue(29500)
+        grid.addWidget(self.scan_tx_rf, 3, 1)
+        grid.addWidget(QLabel("手动 RX/MHz"), 3, 2)
+        self.scan_rx_rf = QSpinBox()
+        self.scan_rx_rf.setRange(protocol.RX_RF_MIN_MHZ, protocol.RX_RF_MAX_MHZ)
+        self.scan_rx_rf.setValue(19966)
+        grid.addWidget(self.scan_rx_rf, 3, 3)
+        layout.addLayout(grid)
+
+        button_row = QHBoxLayout()
+        self.scan_start_btn = QPushButton("开始")
+        self.scan_start_btn.clicked.connect(self._on_scan_start)
+        self.scan_pause_btn = QPushButton("暂停")
+        self.scan_pause_btn.clicked.connect(self._on_scan_pause)
+        self.scan_pause_btn.setEnabled(False)
+        self.scan_stop_btn = QPushButton("结束")
+        self.scan_stop_btn.clicked.connect(self._on_scan_stop)
+        self.scan_stop_btn.setEnabled(False)
+        button_row.addWidget(self.scan_start_btn)
+        button_row.addWidget(self.scan_pause_btn)
+        button_row.addWidget(self.scan_stop_btn)
+        button_row.addStretch()
+        layout.addLayout(button_row)
+
+        status_row = QHBoxLayout()
+        self.scan_progress = QProgressBar()
+        self.scan_progress.setRange(0, 1)
+        self.scan_progress.setValue(0)
+        status_row.addWidget(self.scan_progress, 2)
+        self.scan_status_label = QLabel("拍数 0/0 | 跳过 0 | 当前 θ=-- φ=--")
+        self.scan_status_label.setMinimumWidth(220)
+        status_row.addWidget(self.scan_status_label, 3)
+        layout.addLayout(status_row)
         return group
 
     def _create_log_group(self) -> QGroupBox:
@@ -547,6 +658,229 @@ class KaRfUnitPanel(QFrame):
             return driver.set_rx_enabled(value)
 
         self._safe_send(action)
+    def _scan_params(self) -> Optional[Dict[str, float]]:
+        """读取并校验扫描参数；非法时返回 ``None`` 并提示。"""
+        theta_start = self.scan_theta_start.value()
+        theta_end = self.scan_theta_end.value()
+        theta_step = self.scan_theta_step.value()
+        phi_start = self.scan_phi_start.value()
+        phi_end = self.scan_phi_end.value()
+        phi_step = self.scan_phi_step.value()
+        if theta_step <= 0 or phi_step <= 0:
+            QMessageBox.warning(self, "参数错误", "θ 与 φ 步进必须 > 0")
+            return None
+        if not (theta_start <= theta_end):
+            QMessageBox.warning(self, "参数错误", "θ 终止必须 ≥ θ 起始")
+            return None
+        if not (phi_start <= phi_end):
+            QMessageBox.warning(self, "参数错误", "φ 终止必须 ≥ φ 起始")
+            return None
+        return {
+            "theta_start": theta_start,
+            "theta_end": theta_end,
+            "theta_step": theta_step,
+            "phi_start": phi_start,
+            "phi_end": phi_end,
+            "phi_step": phi_step,
+            "interval_ms": max(1, int(self.scan_interval_ms.value())),
+        }
+
+    def _scan_count(self, params: Dict[str, float]) -> int:
+        """按起止与步进计算总拍数（θ 外层、φ 内层）。"""
+        theta_n = int(round((params["theta_end"] - params["theta_start"]) / params["theta_step"])) + 1
+        phi_n = int(round((params["phi_end"] - params["phi_start"]) / params["phi_step"])) + 1
+        return max(1, theta_n) * max(1, phi_n)
+
+    def _scan_iter_pairs(self, params: Dict[str, float]):
+        """生成 (θ, φ) 扫描序列；θ 外层、φ 内层。"""
+        theta = params["theta_start"]
+        step_t = params["theta_step"]
+        step_p = params["phi_step"]
+        while theta <= params["theta_end"] + 1e-9:
+            phi = params["phi_start"]
+            while phi <= params["phi_end"] + 1e-9:
+                yield round(theta, 4), round(phi, 4)
+                phi += step_p
+            theta += step_t
+
+    def _scan_resolve_freq(self, target_mask: int) -> Tuple[Optional[float], Optional[float], str]:
+        """根据频点来源解析本次扫描使用的 TX/RX RF。
+
+        Returns:
+            (tx_rf, rx_rf, error_message)；未选阵面的频率为 ``None``，失败时 error_message 非空。
+        """
+        source = self.scan_freq_source.currentData()
+        if source == "manual":
+            tx_rf = float(self.scan_tx_rf.value()) if target_mask & protocol.BEAM_TARGET_TX else None
+            rx_rf = float(self.scan_rx_rf.value()) if target_mask & protocol.BEAM_TARGET_RX else None
+            if tx_rf is not None and not protocol.tx_rf_valid(int(tx_rf)):
+                return None, None, "手动 TX 频率超出协议范围"
+            if rx_rf is not None and not protocol.rx_rf_valid(int(rx_rf)):
+                return None, None, "手动 RX 频率超出协议范围"
+            return tx_rf, rx_rf, ""
+        if self._last_status_time == 0.0 or time.monotonic() - self._last_status_time > REPORT_TIMEOUT_S:
+            return None, None, "STATUS_REPORT 已超时，无法读取当前 RF"
+        status = self._latest_status or {}
+        tx_rf = float(status.get("tx_rf_mhz") or 0) if target_mask & protocol.BEAM_TARGET_TX else None
+        rx_rf = float(status.get("rx_rf_mhz") or 0) if target_mask & protocol.BEAM_TARGET_RX else None
+        if tx_rf is not None and not protocol.tx_rf_valid(int(tx_rf)):
+            return None, None, "STATUS_REPORT 的 TX RF 超出协议范围"
+        if rx_rf is not None and not protocol.rx_rf_valid(int(rx_rf)):
+            return None, None, "STATUS_REPORT 的 RX RF 超出协议范围"
+        return tx_rf, rx_rf, ""
+
+    def _scan_target_mask(self) -> int:
+        """根据现有勾选框计算 0x14 目标掩码。"""
+        mask = 0
+        if self.beam_tx_check.isChecked():
+            mask |= protocol.BEAM_TARGET_TX
+        if self.beam_rx_check.isChecked():
+            mask |= protocol.BEAM_TARGET_RX
+        return mask
+
+    @Slot()
+    def _on_scan_start(self) -> None:
+        """开始波束扫描。"""
+        if self._scan_state == "RUNNING":
+            return
+        if self._shutdown:
+            return
+        params = self._scan_params()
+        if params is None:
+            return
+        mask = self._scan_target_mask()
+        if mask == 0:
+            QMessageBox.warning(self, "参数错误", "请至少勾选 TX 或 RX 目标")
+            return
+        tx_rf, rx_rf, err = self._scan_resolve_freq(mask)
+        if err:
+            QMessageBox.warning(self, "参数错误", err or "无法解析扫描频点")
+            return
+
+        self._scan_pairs = list(self._scan_iter_pairs(params))
+        self._scan_total = len(self._scan_pairs)
+        self._scan_index = 0
+        self._scan_skipped = 0
+        self._scan_tx_rf = tx_rf
+        self._scan_rx_rf = rx_rf
+        self._scan_mask = mask
+        self._scan_params_snapshot = params
+        self._scan_state = "RUNNING"
+        self.scan_progress.setRange(0, self._scan_total)
+        self.scan_progress.setValue(0)
+        self._scan_update_status_label()
+        self.scan_start_btn.setEnabled(False)
+        self.scan_pause_btn.setEnabled(True)
+        self.scan_pause_btn.setText("暂停")
+        self.scan_stop_btn.setEnabled(True)
+        self._scan_schedule_next()
+
+    @Slot()
+    def _on_scan_pause(self) -> None:
+        """暂停或继续扫描。"""
+        if self._scan_state == "RUNNING":
+            self._scan_state = "PAUSED"
+            self._scan_timer.stop()
+            self.scan_pause_btn.setText("继续")
+            self._scan_update_status_label()
+        elif self._scan_state == "PAUSED":
+            self._scan_state = "RUNNING"
+            self.scan_pause_btn.setText("暂停")
+            self._scan_update_status_label()
+            self._scan_schedule_next()
+
+    @Slot()
+    def _on_scan_stop(self) -> None:
+        """用户主动结束扫描：停止 timer、把指针拉满并复位按钮。"""
+        self._scan_timer.stop()
+        self._scan_index = self._scan_total
+        self.scan_progress.setValue(self._scan_total)
+        self._scan_reset_to_idle()
+
+    def _scan_reset_to_idle(self) -> None:
+        """把扫描状态重置为 IDLE 并复位按钮（自然完成也复用此状态）。"""
+        self._scan_state = "IDLE"
+        self.scan_start_btn.setEnabled(True)
+        self.scan_pause_btn.setEnabled(False)
+        self.scan_pause_btn.setText("暂停")
+        self.scan_stop_btn.setEnabled(False)
+        self._scan_update_status_label()
+
+    def _reset_scan_controls(self) -> None:
+        """兼容旧名；新代码请用 :meth:`_scan_reset_to_idle`。"""
+        self._scan_reset_to_idle()
+
+    def _scan_schedule_next(self) -> None:
+        """调度下一拍扫描；达到末尾则切到 FINISHED（不重置为 IDLE）。"""
+        if self._scan_state != "RUNNING":
+            return
+        if self._scan_index >= self._scan_total:
+            self._scan_state = "FINISHED"
+            self.scan_start_btn.setEnabled(True)
+            self.scan_pause_btn.setEnabled(False)
+            self.scan_pause_btn.setText("暂停")
+            self.scan_stop_btn.setEnabled(False)
+            self._scan_update_status_label()
+            return
+        self._scan_timer.start(max(10, int(self._scan_params_snapshot["interval_ms"])))
+
+    def _scan_tick(self) -> None:
+        """执行单拍：发送一次 0x14 并准备下一拍。"""
+        if self._scan_state != "RUNNING":
+            return
+        if self._scan_index >= self._scan_total:
+            # 拍数已耗尽，自然完成（与用户主动结束区分）
+            self._scan_state = "FINISHED"
+            self.scan_start_btn.setEnabled(True)
+            self.scan_pause_btn.setEnabled(False)
+            self.scan_pause_btn.setText("暂停")
+            self.scan_stop_btn.setEnabled(False)
+            self._scan_update_status_label()
+            return
+        theta, phi = self._scan_pairs[self._scan_index]
+        self._scan_current_theta = theta
+        self._scan_current_phi = phi
+        self._scan_index += 1
+        self.scan_progress.setValue(self._scan_index)
+        ok = self._emit_scan_frame(theta, phi)
+        if not ok:
+            self._scan_skipped += 1
+        self._scan_update_status_label()
+        self._scan_schedule_next()
+
+    def _emit_scan_frame(self, theta: float, phi: float) -> bool:
+        """通过当前 Driver 发送一次扫描帧；返回是否成功入队。"""
+        driver = self._driver
+        if driver is None or not driver.running:
+            self.log_text.appendPlainText("扫描跳过：串口未连接")
+            return False
+        try:
+            tx_bh = tx_bv = rx_bh = rx_bv = 0
+            if self._scan_mask & protocol.BEAM_TARGET_TX:
+                tx_bh, tx_bv = protocol.compute_beam_pair(
+                    theta, phi, freq_mhz=self._scan_tx_rf, f0=protocol.TX_BEAM_F0
+                )
+            if self._scan_mask & protocol.BEAM_TARGET_RX:
+                rx_bh, rx_bv = protocol.compute_beam_pair(
+                    theta, phi, freq_mhz=self._scan_rx_rf, f0=protocol.RX_BEAM_F0
+                )
+            sent = driver.set_beam(self._scan_mask, tx_bh, tx_bv, rx_bh, rx_bv)
+            if not sent:
+                self.log_text.appendPlainText("扫描跳过：发送队列拒绝或串口异常")
+                return False
+            return True
+        except ValueError as exc:
+            self.log_text.appendPlainText(f"扫描跳过：{exc}")
+            return False
+
+    def _scan_update_status_label(self) -> None:
+        """把扫描进度与状态写入标签。"""
+        theta_text = "--" if self._scan_index == 0 else f"{self._scan_current_theta:.2f}"
+        phi_text = "--" if self._scan_index == 0 else f"{self._scan_current_phi:.2f}"
+        self.scan_status_label.setText(
+            f"拍数 {self._scan_index}/{self._scan_total} | 跳过 {self._scan_skipped} | "
+            f"当前 θ={theta_text}° φ={phi_text}° | 状态 {self._scan_state}"
+        )
 
     @Slot()
     def _apply_beam(self) -> None:
@@ -656,6 +990,12 @@ class KaRfUnitPanel(QFrame):
 
     def deactivate(self) -> bool:
         """断开串口并暂停隐藏页面的定时器。"""
+        # 隐藏前强制停止波束扫描，避免页面被禁用时仍持续发送。
+        self._scan_timer.stop()
+        if self._scan_state in ("RUNNING", "PAUSED"):
+            self._scan_state = "PAUSED"
+            self.scan_pause_btn.setText("继续")
+            self._scan_update_status_label()
         stopped = self.disconnect_device()
         if stopped:
             self._refresh_timer.stop()
@@ -666,6 +1006,10 @@ class KaRfUnitPanel(QFrame):
 
     def shutdown(self) -> bool:
         """停止本页面后台活动；允许主窗口和 closeEvent 重复调用。"""
+        self._scan_timer.stop()
+        if self._scan_state != "IDLE":
+            self._scan_state = "IDLE"
+            self._scan_update_status_label()
         if self._shutdown:
             return True
         if not self._stop_driver():

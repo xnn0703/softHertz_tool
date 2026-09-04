@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
@@ -61,6 +62,20 @@ POLAR_RIGHT_CIRCLE = 1  # 右旋圆极化
 
 # 0x14 波束原始码范围。
 BEAM_CODE_MAX = 4095
+BEAM_CODE_RANGE = 4096  # 12 bit 补码回绕
+# 0x10 极化与 0x14 波束角度（度）边界。
+THETA_MIN_DEG = 0.0
+THETA_MAX_DEG = 90.0
+PHI_MIN_DEG = 0.0
+PHI_MAX_DEG = 360.0
+# 0x14 波束换算中心频率（MHz），与协议文档中 Tx_f0/Rx_f0 一致。
+TX_BEAM_F0 = 30000
+RX_BEAM_F0 = 20270
+# 0x10 射频（MHz）允许范围。
+RX_RF_MIN_MHZ = 17700
+RX_RF_MAX_MHZ = 21200
+TX_RF_MIN_MHZ = 27500
+TX_RF_MAX_MHZ = 31000
 
 # 0x30 STATUS_REPORT 固定 payload 长度。
 STATUS_REPORT_PAYLOAD_LEN = 43
@@ -559,6 +574,103 @@ def build_set_beam(
         + be16_write(rx_beam_v)
     )
     return encode_frame(CMD_SET_BEAM, payload)
+
+
+def angle_u_to_code(u: float) -> int:
+    """将有限相位 ``u``（度）转换为 12 bit 补码波控值。
+
+    算法与 KA256 V2 固件一致：``lroundf(u * 2048 / 180) mod 4096``。
+    半码按远离零方向舍入；相位超过一个半周时仍按 12 bit 协议回绕。
+
+    Args:
+        u: 角度，单位度。
+
+    Returns:
+        12 bit 补码（0~4095）。
+
+    Raises:
+        ValueError: ``u`` 非有限数。
+    """
+
+    if not math.isfinite(u):
+        raise ValueError(f"相位角必须是有限数，实际 {u}")
+    scaled = u * 2048.0 / 180.0
+    rounded = math.floor(scaled + 0.5) if scaled >= 0.0 else math.ceil(scaled - 0.5)
+    return int(rounded) % BEAM_CODE_RANGE
+
+
+def compute_beam_pair(
+    theta_deg: float,
+    phi_deg: float,
+    *,
+    freq_mhz: float,
+    f0: int,
+) -> Tuple[int, int]:
+    """根据角度和实际工作频率计算 ``(BeamH, BeamV)``。
+
+    协议公式：``u_x = 180 * (f/f0) * sinθ * cosφ``，
+    ``u_y = 180 * (f/f0) * sinθ * sinφ``；再由 :func:`angle_u_to_code` 编码。
+
+    Args:
+        theta_deg: 离轴角（俯仰），单位度，``0~90``。
+        phi_deg: 方位角，单位度，``0~360``。
+        freq_mhz: 实际工作载波中心频率，单位 MHz。
+        f0: 标称中心频率，TX 为 30000，RX 为 20270。
+
+    Returns:
+        ``(BeamH, BeamV)`` 12 bit 补码。
+
+    Raises:
+        ValueError: 角度或频率非法。
+    """
+
+    if not math.isfinite(theta_deg) or not (THETA_MIN_DEG - 1e-6 <= theta_deg <= THETA_MAX_DEG + 1e-6):
+        raise ValueError(f"θ 必须在 {THETA_MIN_DEG}~{THETA_MAX_DEG} 度，实际 {theta_deg}")
+    if not math.isfinite(phi_deg) or not (PHI_MIN_DEG - 1e-6 <= phi_deg <= PHI_MAX_DEG + 1e-6):
+        raise ValueError(f"φ 必须在 {PHI_MIN_DEG}~{PHI_MAX_DEG} 度，实际 {phi_deg}")
+    if not math.isfinite(freq_mhz) or freq_mhz <= 0:
+        raise ValueError(f"频率必须为正数，实际 {freq_mhz} MHz")
+    if f0 <= 0:
+        raise ValueError(f"f0 必须为正数，实际 {f0}")
+    ratio = freq_mhz / f0
+    theta_rad = math.radians(theta_deg)
+    phi_rad = math.radians(phi_deg)
+    ux = 180.0 * ratio * math.sin(theta_rad) * math.cos(phi_rad)
+    uy = 180.0 * ratio * math.sin(theta_rad) * math.sin(phi_rad)
+    return angle_u_to_code(ux), angle_u_to_code(uy)
+
+
+def build_set_beam_from_angles(
+    target_mask: int,
+    theta_deg: float,
+    phi_deg: float,
+    *,
+    tx_rf_mhz: float,
+    rx_rf_mhz: float,
+) -> bytes:
+    """按 (θ, φ) 角度与当前载波频率生成 ``0x14 SET_BEAM`` 帧。
+
+    协议公式：``u_x/u_y = 180 * (f/f0) * sinθ * cosφ/sinφ``，再编码为 12 bit 补码。
+
+    Args:
+        target_mask: ``0x14`` 目标掩码，bit0=TX、bit1=RX，至少 1 位。
+        theta_deg: 离轴角，单位度，``0~90``。
+        phi_deg: 方位角，单位度，``0~360``。
+        tx_rf_mhz: 发射实际工作载波频率，单位 MHz。
+        rx_rf_mhz: 接收实际工作载波频率，单位 MHz。
+
+    Returns:
+        完整 ``0x14`` 请求帧。
+
+    Raises:
+        ValueError: 目标掩码非法、角度或频率非法、换算结果超 12 bit 补码范围。
+    """
+
+    if target_mask & ~BEAM_TARGET_ALL or target_mask == 0:
+        raise ValueError(f"target_mask 仅允许 bit0/1，至少 1 位，实际 0x{target_mask:02X}")
+    tx_bh, tx_bv = compute_beam_pair(theta_deg, phi_deg, freq_mhz=tx_rf_mhz, f0=TX_BEAM_F0)
+    rx_bh, rx_bv = compute_beam_pair(theta_deg, phi_deg, freq_mhz=rx_rf_mhz, f0=RX_BEAM_F0)
+    return build_set_beam(target_mask, tx_bh, tx_bv, rx_bh, rx_bv)
 
 
 def build_set_ext_ref(ref_mhz: int) -> bytes:

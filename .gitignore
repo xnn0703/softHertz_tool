@@ -39,3 +39,7 @@ logs/
 .DS_Store
 Thumbs.db
 *.swp
+
+# ===== ZCode 客户端本地会话状态 =====
+.zcode/
+AGENTS.md

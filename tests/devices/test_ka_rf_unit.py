@@ -9,7 +9,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QObject, QSettings, Signal
 from PySide6.QtWidgets import QApplication
 
 from soft_hertz_tool.devices.ka_rf_unit import protocol
@@ -571,3 +571,357 @@ def test_qsettings_storage_for_workspace_settings(qt_app, tmp_path):
     settings.sync()
     reread = QSettings(str(tmp_path / "test.ini"), QSettings.IniFormat)
     assert reread.value("device_model") == "KA_RF_UNIT"
+
+
+# ---------------------------------------------------------------------------
+# 波束角度换算（协议层）
+# ---------------------------------------------------------------------------
+
+
+def test_angle_u_to_code_conversion_matches_protocol_spec():
+    assert protocol.angle_u_to_code(0.0) == 0
+    assert protocol.angle_u_to_code(90.0) == 1024  # 90*2048/180
+    assert protocol.angle_u_to_code(180.0) == 2048  # 文档边界
+    assert protocol.angle_u_to_code(-0.5) == 4090  # 接近 0 的负值折回高码
+    assert protocol.angle_u_to_code(-180.0) == 2048
+    # 固件 lroundf(-0.5) = -1，之后 modulo 4096，不能先加 4096 再做半上舍入。
+    assert protocol.angle_u_to_code(-0.0439453125) == 4095
+    # 高于一个半周的相位与 KA256 V2 一样按 12 bit 回绕。
+    assert protocol.angle_u_to_code(186.0) == 2116
+    with pytest.raises(ValueError):
+        protocol.angle_u_to_code(float("nan"))
+
+
+def test_compute_beam_pair_matches_formula():
+    # θ=0 任何 φ 必然 (0, 0)
+    assert protocol.compute_beam_pair(0.0, 45.0, freq_mhz=30000, f0=30000) == (0, 0)
+    # θ=30, φ=0: ux=180*sin30*cos0=90, uy=0
+    assert protocol.compute_beam_pair(30.0, 0.0, freq_mhz=30000, f0=30000) == (1024, 0)
+    # θ=30, φ=90: ux=0, uy=90
+    assert protocol.compute_beam_pair(30.0, 90.0, freq_mhz=30000, f0=30000) == (0, 1024)
+    # θ=90, φ=0: ux=180, uy=0
+    assert protocol.compute_beam_pair(90.0, 0.0, freq_mhz=30000, f0=30000) == (
+        protocol.angle_u_to_code(180.0),
+        0,
+    )
+    # 与 KA256 V2 固件 codec 的黄金点逐项一致。
+    assert protocol.compute_beam_pair(30.0, 45.0, freq_mhz=29500, f0=protocol.TX_BEAM_F0) == (712, 712)
+    assert protocol.compute_beam_pair(30.0, 135.0, freq_mhz=29500, f0=protocol.TX_BEAM_F0) == (3384, 712)
+    assert protocol.compute_beam_pair(30.0, 45.0, freq_mhz=19450, f0=protocol.RX_BEAM_F0) == (695, 695)
+
+
+def test_compute_beam_pair_validates_ranges():
+    with pytest.raises(ValueError):
+        protocol.compute_beam_pair(120.0, 0.0, freq_mhz=30000, f0=30000)
+    with pytest.raises(ValueError):
+        protocol.compute_beam_pair(0.0, 400.0, freq_mhz=30000, f0=30000)
+    with pytest.raises(ValueError):
+        protocol.compute_beam_pair(0.0, 0.0, freq_mhz=0, f0=30000)
+    with pytest.raises(ValueError):
+        protocol.compute_beam_pair(0.0, 0.0, freq_mhz=30000, f0=0)
+
+
+def test_build_set_beam_from_angles_matches_explicit_beam():
+    # θ=30 φ=90 在 f/f0=1.0 时为 (0, 1024)
+    from_angles = protocol.build_set_beam_from_angles(
+        0x03, 30.0, 90.0, tx_rf_mhz=30000, rx_rf_mhz=20270
+    )
+    explicit = protocol.build_set_beam(0x03, 0, 1024, 0, 1024)
+    assert from_angles == explicit
+    parsed, message = protocol.parse_response(from_angles)
+    assert message == "OK"
+    assert parsed is not None
+    decoded = parsed["decoded"]
+
+
+def test_build_set_beam_from_angles_rejects_invalid_mask():
+    with pytest.raises(ValueError):
+        protocol.build_set_beam_from_angles(
+            0, 30.0, 90.0, tx_rf_mhz=30000, rx_rf_mhz=20270
+        )
+    with pytest.raises(ValueError):
+        protocol.build_set_beam_from_angles(
+            0x04, 30.0, 90.0, tx_rf_mhz=30000, rx_rf_mhz=20270
+        )
+
+
+# ---------------------------------------------------------------------------
+# 波束扫描（Panel 状态机）
+# ---------------------------------------------------------------------------
+
+
+def test_scan_params_and_count(qt_app):
+    panel = KaRfUnitPanel()
+    # 默认范围 0..30 step5 × 0..90 step10 = 7 × 10 = 70
+    params = panel._scan_params()
+    assert params is not None
+    assert panel._scan_count(params) == 70
+    pairs = list(panel._scan_iter_pairs(params))
+    assert pairs[0] == (0.0, 0.0)
+    assert pairs[-1] == (30.0, 90.0)
+    assert len(pairs) == 70
+
+
+def test_scan_params_rejects_zero_step(qt_app):
+    from unittest.mock import patch
+    panel = KaRfUnitPanel()
+    # QDoubleSpinBox 已设 min=0.1，setValue(0.0) 会被夹到 0.1。
+    # 临时放宽 min 边界以设置 0 触发校验。
+    panel.scan_theta_step.setMinimum(0.0)
+    panel.scan_theta_step.setValue(0.0)
+    with patch("soft_hertz_tool.devices.ka_rf_unit.panel.QMessageBox.warning"):
+        assert panel._scan_params() is None
+    panel.scan_theta_step.setMinimum(0.1)
+    panel.scan_theta_step.setValue(5.0)
+    panel.scan_phi_step.setMinimum(0.0)
+    panel.scan_phi_step.setValue(0.0)
+    with patch("soft_hertz_tool.devices.ka_rf_unit.panel.QMessageBox.warning"):
+        assert panel._scan_params() is None
+
+
+def test_scan_target_mask_and_freq_source(qt_app):
+    panel = KaRfUnitPanel()
+    panel.beam_tx_check.setChecked(False)
+    panel.beam_rx_check.setChecked(False)
+    assert panel._scan_target_mask() == 0
+    panel.beam_tx_check.setChecked(True)
+    assert panel._scan_target_mask() & protocol.BEAM_TARGET_TX
+    # 默认自动频点，未收到 STATUS 时应失败。
+    assert panel._scan_resolve_freq(protocol.BEAM_TARGET_TX)[2]
+    # 手动 TX/RX 双频分别解析。
+    panel.scan_freq_source.setCurrentIndex(1)
+    panel.scan_tx_rf.setValue(29500)
+    panel.scan_rx_rf.setValue(19966)
+    tx, rx, err = panel._scan_resolve_freq(protocol.BEAM_TARGET_ALL)
+    assert err == "" and tx == 29500 and rx == 19966
+
+
+def test_scan_rejects_stale_status_frequency(qt_app):
+    panel = KaRfUnitPanel()
+    panel._latest_status = {"tx_rf_mhz": 29500, "rx_rf_mhz": 19966}
+    panel._last_status_time = time.monotonic() - 1.1
+    assert "超时" in panel._scan_resolve_freq(protocol.BEAM_TARGET_ALL)[2]
+
+
+def test_scan_requires_target_and_driver(qt_app):
+    from unittest.mock import patch
+    panel = KaRfUnitPanel()
+    panel.beam_tx_check.setChecked(False)
+    panel.beam_rx_check.setChecked(False)
+    # 启动会因 mask=0 终止；QMessageBox.warning 阻塞测试，monkeypatch 屏蔽
+    with patch("soft_hertz_tool.devices.ka_rf_unit.panel.QMessageBox.warning"):
+        panel._on_scan_start()
+    assert panel._scan_state == "IDLE"
+    panel.beam_tx_check.setChecked(True)
+    panel.scan_freq_source.setCurrentIndex(1)
+    panel.scan_tx_rf.setValue(29500)
+    with patch("soft_hertz_tool.devices.ka_rf_unit.panel.QMessageBox.warning"):
+        panel._on_scan_start()
+    # 仍未连接 Driver，按设计仍进入 RUNNING，但每拍会跳过并累计错误
+    assert panel._scan_state == "RUNNING"
+    # 主动停止以避免后续测试场景中残留 timer
+    panel._on_scan_stop()
+    assert panel._scan_state == "IDLE"
+    panel.scan_interval_ms.setValue(5)
+
+
+class _StubScanDriver(QObject):
+    """最小 Driver 替身：仅暴露 set_beam 与 send_bytes 的状态。"""
+
+    log_signal = Signal(str)
+    opened_signal = Signal(bool, str)
+    frame_signal = Signal(object)
+    status_signal = Signal(dict)
+    result_signal = Signal(int, str)
+    report_rate_signal = Signal(float)
+    finished = Signal()
+
+    def __init__(self, port="spy://", baudrate=460800):
+        super().__init__()
+        self.port_name = port
+        self.baudrate = baudrate
+        self.running = True
+        self.beam_calls: list[tuple] = []
+
+    def stop(self, timeout_ms=3000):
+        self.running = False
+        return True
+
+    def start(self):
+        return None
+
+    def set_beam(self, target_mask, tx_bh, tx_bv, rx_bh, rx_bv):
+        self.beam_calls.append((target_mask, tx_bh, tx_bv, rx_bh, rx_bv))
+        return True
+
+
+def _install_stub_driver(panel, qt_app, target_mask_value=0x03, tx_rf=30000, status_rf=0):
+    """注入一个 _StubScanDriver，并完成 connect_device 流程。"""
+    driver = _StubScanDriver()
+    captured = {}
+
+    def _factory(port, baudrate):
+        captured["port"] = port
+        captured["baudrate"] = baudrate
+        return driver
+
+    panel._driver_factory = _factory
+    panel.beam_tx_check.setChecked(True)
+    panel.beam_rx_check.setChecked(bool(target_mask_value & 0x02))
+    panel.scan_freq_source.setCurrentIndex(1)
+    panel.scan_tx_rf.setValue(tx_rf)
+    # 提供 STATUS_REPORT 中的 RF，确保 frequency source=auto 时也能跑
+    if status_rf:
+        panel._latest_status = {
+            "tx_rf_mhz": status_rf,
+            "rx_rf_mhz": status_rf,
+        }
+    panel._connect_device("spy://", 460800)
+    panel._connection_generation += 0  # keep simple
+    # 触发 opened_signal 让 serial_connection 切到已连接
+    for slot, msg in [
+        (panel._on_driver_opened, True),
+    ]:
+        try:
+            slot(driver, panel._connection_generation, True, "已打开")
+        except TypeError:
+            slot(driver, panel._connection_generation, True, "已打开")
+    qt_app.processEvents()
+    return driver
+
+
+def test_scan_emit_expected_angle_sequence(qt_app):
+    panel = KaRfUnitPanel()
+    panel.scan_theta_start.setValue(0.0)
+    panel.scan_theta_end.setValue(10.0)
+    panel.scan_theta_step.setValue(10.0)
+    panel.scan_phi_start.setValue(0.0)
+    panel.scan_phi_end.setValue(20.0)
+    panel.scan_phi_step.setValue(10.0)
+    panel.scan_interval_ms.setValue(5)
+    driver = _install_stub_driver(panel, qt_app, target_mask_value=0x03, tx_rf=30000)
+    panel._on_scan_start()
+    # 模拟 QTimer 触发：直接调用 _scan_tick 直到结束
+    for _ in range(panel._scan_total + 2):
+        if panel._scan_state != "RUNNING":
+            break
+        panel._scan_tick()
+    assert panel._scan_state == "FINISHED"
+    assert panel._scan_index == 6  # 2 θ × 3 φ = 6 拍
+    # FINISHED 时控件可重新启动
+    assert panel.scan_start_btn.isEnabled()
+    # 验证最后一次调用是 (10, 20)
+    mask, tx_bh, tx_bv, rx_bh, rx_bv = driver.beam_calls[-1]
+    assert mask == 0x03
+    expected_tx = protocol.compute_beam_pair(10.0, 20.0, freq_mhz=30000, f0=protocol.TX_BEAM_F0)
+    assert (tx_bh, tx_bv) == expected_tx
+    panel.shutdown()
+    panel._driver = None  # avoid teardown warnings
+
+
+def test_scan_tx_only_does_not_calculate_rx_from_tx_frequency(qt_app):
+    panel = KaRfUnitPanel()
+    panel.scan_theta_start.setValue(90.0)
+    panel.scan_theta_end.setValue(90.0)
+    panel.scan_phi_start.setValue(0.0)
+    panel.scan_phi_end.setValue(0.0)
+    panel.scan_interval_ms.setValue(5)
+    driver = _install_stub_driver(panel, qt_app, target_mask_value=0x01, tx_rf=31000)
+    panel._on_scan_start()
+    panel._scan_tick()
+    assert driver.beam_calls == [(0x01, 2116, 0, 0, 0)]
+    panel.shutdown()
+    panel._driver = None
+
+
+def test_scan_pause_and_resume(qt_app):
+    panel = KaRfUnitPanel()
+    panel.scan_theta_start.setValue(0.0)
+    panel.scan_theta_end.setValue(10.0)
+    panel.scan_theta_step.setValue(10.0)
+    panel.scan_phi_start.setValue(0.0)
+    panel.scan_phi_end.setValue(0.0)
+    panel.scan_phi_step.setValue(10.0)
+    panel.scan_interval_ms.setValue(5)
+    _install_stub_driver(panel, qt_app, target_mask_value=0x01, tx_rf=30000)
+    panel._on_scan_start()
+    panel._scan_tick()  # 跑 1 拍
+    panel._on_scan_pause()
+    assert panel._scan_state == "PAUSED"
+    paused_index = panel._scan_index
+    # 暂停期间手动 tick 不应改变状态（_scan_tick 内 RUNNING 检查会直接 return）
+    panel._scan_tick()
+    assert panel._scan_index == paused_index
+    panel._on_scan_pause()  # 继续
+    assert panel._scan_state == "RUNNING"
+    while panel._scan_state == "RUNNING":
+        panel._scan_tick()
+    assert panel._scan_state == "FINISHED"
+    assert panel._scan_index == 2  # 0..10 × 0 = 2 拍
+    assert panel.scan_start_btn.isEnabled()
+    panel.shutdown()
+    panel._driver = None
+
+
+def test_scan_stop_resets_state(qt_app):
+    panel = KaRfUnitPanel()
+    panel.scan_interval_ms.setValue(5)
+    _install_stub_driver(panel, qt_app, target_mask_value=0x01, tx_rf=30000)
+    panel._on_scan_start()
+    panel._scan_tick()
+    panel._on_scan_stop()
+    # 用户主动结束 → IDLE 且按钮复位
+    assert panel._scan_state == "IDLE"
+    assert panel.scan_start_btn.isEnabled()
+    assert not panel.scan_pause_btn.isEnabled()
+    panel.shutdown()
+    panel._driver = None
+
+
+def test_scan_disconnect_stops_timer(qt_app):
+    panel = KaRfUnitPanel()
+    panel.scan_interval_ms.setValue(5)
+    _install_stub_driver(panel, qt_app, target_mask_value=0x01, tx_rf=30000)
+    panel._on_scan_start()
+    panel._scan_tick()
+    # deactivate 强制停 timer 并把状态切到 PAUSED
+    panel.deactivate()
+    assert not panel._scan_timer.isActive()
+    assert panel._scan_state == "PAUSED"
+    # shutdown 后回到 IDLE
+    panel.shutdown()
+    assert panel._scan_state == "IDLE"
+    panel._driver = None
+
+
+def test_scan_skips_when_driver_not_running(qt_app):
+    panel = KaRfUnitPanel()
+    panel.scan_interval_ms.setValue(5)
+    _install_stub_driver(panel, qt_app, target_mask_value=0x01, tx_rf=30000)
+    # 把 driver 标记为未运行
+    panel._driver.running = False
+    panel._on_scan_start()
+    panel._scan_tick()
+    assert panel._scan_skipped >= 1
+    assert panel._scan_index == 1
+    panel.shutdown()
+    panel._driver = None
+
+
+# ---------------------------------------------------------------------------
+# Simulator 接收角度帧
+# ---------------------------------------------------------------------------
+
+
+def test_simulator_applies_beam_from_angle_frame():
+    fake = _FakePort()
+    sim = KaRfUnitDeviceSimulator(fake)
+    frame = protocol.build_set_beam_from_angles(
+        0x03, 30.0, 90.0, tx_rf_mhz=30000, rx_rf_mhz=20270
+    )
+    sim.process_input(frame)
+    expected_tx = protocol.compute_beam_pair(30.0, 90.0, freq_mhz=30000, f0=protocol.TX_BEAM_F0)
+    expected_rx = protocol.compute_beam_pair(30.0, 90.0, freq_mhz=20270, f0=protocol.RX_BEAM_F0)
+    assert (sim.tx_beam_h, sim.tx_beam_v) == expected_tx
+    assert (sim.rx_beam_h, sim.rx_beam_v) == expected_rx
+    assert fake._written and fake._written[-1][-3] == protocol.RESULT_OK

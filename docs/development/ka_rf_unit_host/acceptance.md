@@ -60,6 +60,9 @@
 - [x] `tests/integration/test_dependency_boundaries.py` PASS：新增设备
       切片未违反 `shared`/`devices`/`workspaces`/`app` 单向依赖。
 - [x] `tests/integration/test_repository_layout.py` PASS：未引入生成物。
+- [x] **波束扫描**：θ/φ 起止、步进、间隔与频点源配置完整；12 bit 补码换算（`u*2048/180`）覆盖 0/90/180/-180 边界；扫描 IDLE/RUNNING/PAUSED/FINISHED 状态机在隐藏/关闭页面时强制停 timer；未连接 Driver 的拍会被跳过并累计错误。
+- [x] **波束扫描修复**：上位机编码与 KA256 V2 `lroundf + mod 4096` 合同一致；手动 TX/RX 双频、单阵面
+      扫描和过期 STATUS_REPORT 均 fail-closed；固件黄金点和边界回归通过。
 
 ## G. 文档
 

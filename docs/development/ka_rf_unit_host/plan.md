@@ -104,6 +104,16 @@ devices/ka_rf_unit.simulator   -> devices/ka_rf_unit.protocol
 - 不同代际的旧 Driver 信号不能污染新连接 UI；测试必须覆盖替换 Driver
   时旧信号被忽略的场景。
 
+## 2026-09-04 波束扫描修复范围
+
+- 角度转 12 bit 码与 KA256 V2 固件统一：对有限相位执行半远离零舍入，再按 4096 取模；不在上位机以
+  `±180°` 拒绝固件可编码的相位。
+- 手动频点分别输入 TX 与 RX；扫描只计算 `target_mask` 实际选中的阵面，未选阵面的 0x14 字段填 0，
+  由既有 target_mask 忽略。
+- 自动频点仅接受未超过 `REPORT_TIMEOUT_S` 的 STATUS_REPORT 缓存，并分别验证 TX/RX RF 协议范围。
+- 增加固件同源黄金点、负半码、超过 ±180° 的模回绕、手动双频、单阵面与过期状态回归；不修改 0x14
+  wire 格式、串口行为或固件。
+
 ## 验收命令
 
 1. `python -m compileall -q src tests packaging` 通过。
