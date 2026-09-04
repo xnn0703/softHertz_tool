@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication
 
 from soft_hertz_tool.app.application import configure_application
 from soft_hertz_tool.app.main_window import MainWindow
+from soft_hertz_tool.identity import display_name_with_version
 
 
 SMOKE_CLOSE_DELAY_MS = 250
@@ -33,6 +34,11 @@ def _parse_arguments(argv: Sequence[str]) -> tuple[argparse.Namespace, list[str]
         action="store_true",
         help="创建主窗口后自动关闭，用于安装包和 CI 启动冒烟",
     )
+    parser.add_argument(
+        "--version",
+        action="store_true",
+        help="打印版本号并退出",
+    )
     return parser.parse_known_args(list(argv))
 
 
@@ -52,10 +58,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     raw_arguments = list(sys.argv[1:] if argv is None else argv)
     options, qt_arguments = _parse_arguments(raw_arguments)
+    if options.version:
+        print(display_name_with_version())
+        return 0
     application_arguments = [sys.argv[0], *qt_arguments]
     # 测试或嵌入场景可能已经创建 QApplication；复用实例可避免 Qt 的单例冲突。
     app = QApplication.instance() or QApplication(application_arguments)
     configure_application(app)
+    if options.smoke:
+        print(display_name_with_version(), flush=True)
     window = MainWindow()
     window.show()
 

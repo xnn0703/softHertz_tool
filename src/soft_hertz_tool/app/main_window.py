@@ -22,6 +22,7 @@ from soft_hertz_tool.identity import (
     DEVICE_MODEL_KEY,
     PRODUCT_DISPLAY_NAME,
     create_application_settings,
+    display_name_with_version,
     load_device_model,
 )
 from soft_hertz_tool.app.registry import WORKSPACE_SPECS
@@ -48,7 +49,7 @@ class MainWindow(QMainWindow):
         """
 
         super().__init__()
-        self.setWindowTitle(PRODUCT_DISPLAY_NAME)
+        self.setWindowTitle(display_name_with_version())
         self._shutdown = False
         icon_path = resource_path("soft_hertz_logo_deepspace_blue_512.png")
         if os.path.exists(icon_path):

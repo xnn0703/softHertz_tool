@@ -955,3 +955,45 @@ def test_simulator_applies_beam_from_angle_frame():
     assert (sim.tx_beam_h, sim.tx_beam_v) == expected_tx
     assert (sim.rx_beam_h, sim.rx_beam_v) == expected_rx
     assert fake._written and fake._written[-1][-3] == protocol.RESULT_OK
+
+
+# ---------------------------------------------------------------------------
+# 版本号注入（运行期）
+# ---------------------------------------------------------------------------
+
+
+def test_runtime_version_falls_back_to_dev_default(monkeypatch):
+    """未设 SOFTHERTZ_VERSION 时 __version__ 应回退 ``0.0.0+dev``。"""
+    import importlib
+    import soft_hertz_tool
+
+    monkeypatch.delenv("SOFTHERTZ_VERSION", raising=False)
+    reloaded = importlib.reload(soft_hertz_tool)
+    assert reloaded.__version__ == "0.0.0+dev"
+
+
+def test_runtime_version_uses_env_value(monkeypatch):
+    """CI 在 tag push 时通过 ``SOFTHERTZ_VERSION=v3.1.3`` 注入。"""
+    import importlib
+    import soft_hertz_tool
+
+    monkeypatch.setenv("SOFTHERTZ_VERSION", "v9.9.9")
+    reloaded = importlib.reload(soft_hertz_tool)
+    assert reloaded.__version__ == "v9.9.9"
+
+
+def test_identity_display_name_includes_version(monkeypatch):
+    """display_name_with_version 应拼接 ``SoftHertz Tool v<version>``。"""
+    import importlib
+    import soft_hertz_tool
+    from soft_hertz_tool import identity
+
+    monkeypatch.setenv("SOFTHERTZ_VERSION", "9.9.9")
+    importlib.reload(soft_hertz_tool)
+    importlib.reload(identity)
+    try:
+        assert identity.display_name_with_version() == "SoftHertz Tool v9.9.9"
+    finally:
+        monkeypatch.delenv("SOFTHERTZ_VERSION", raising=False)
+        importlib.reload(soft_hertz_tool)
+        importlib.reload(identity)

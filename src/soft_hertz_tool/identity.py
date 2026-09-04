@@ -7,6 +7,8 @@ from typing import Optional
 
 from PySide6.QtCore import QSettings
 
+from soft_hertz_tool import __version__
+
 
 PRODUCT_DISPLAY_NAME = "SoftHertz Tool"
 SETTINGS_ORGANIZATION = "SoftHertz"
@@ -15,6 +17,16 @@ LEGACY_SETTINGS_APPLICATION = "AFDTR_Tool"
 DEVICE_MODEL_KEY = "device_model"
 DEFAULT_WORKSPACE_KEY = "AFDTR"
 LOG_DIRECTORY_NAME = "logs"
+
+
+def display_name_with_version() -> str:
+    """返回带版本号的客户可见产品名。
+
+    Returns:
+        例如 ``"SoftHertz Tool v3.1.3"``；本地开发时为
+        ``"SoftHertz Tool v0.0.0+dev"``。
+    """
+    return f"{PRODUCT_DISPLAY_NAME} v{__version__}"
 
 
 def create_application_settings() -> QSettings:

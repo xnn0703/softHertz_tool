@@ -2,9 +2,15 @@
 
 脚本从仓库位置推导全部输入和输出路径，只清理仓库内可再生成的
 ``build/pyinstaller`` 与 ``dist``，并让 PyInstaller 异常直接向调用方传播。
+
+版本号来源：CI 通过 ``SOFTHERTZ_VERSION`` 环境变量（通常是
+``GITHUB_REF_NAME``，如 ``v3.1.3``）注入，脚本内剥掉 ``v`` 前缀并把
+PyInstaller 产物命名为 ``SoftHertz_Tool-<version>.exe``；本地构建缺省
+为 ``0.0.0+dev``。
 """
 
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -12,7 +18,27 @@ from pathlib import Path
 from PyInstaller.__main__ import run
 
 
-APP_NAME = "SoftHertz_Tool"
+DEFAULT_DEV_VERSION = "0.0.0+dev"
+_FILENAME_SAFE_RE = re.compile(r"[^0-9A-Za-z._+-]")
+
+
+def _resolve_version() -> str:
+    """从 ``SOFTHERTZ_VERSION`` 环境变量解析构建版本。
+
+    Returns:
+        已剥 ``v`` 前缀、仅含文件名安全字符的版本字符串。
+    """
+
+    raw = os.environ.get("SOFTHERTZ_VERSION") or DEFAULT_DEV_VERSION
+    if raw.startswith("v") and len(raw) > 1:
+        raw = raw[1:]
+    return _FILENAME_SAFE_RE.sub("-", raw) or DEFAULT_DEV_VERSION
+
+
+def _app_name(version: str) -> str:
+    """根据版本返回 PyInstaller ``--name`` 与产物文件名（不含扩展名）。"""
+
+    return f"SoftHertz_Tool-{version}"
 
 
 def _project_directory() -> Path:
@@ -41,11 +67,12 @@ def _clean_build_outputs(project_dir: Path) -> None:
     shutil.rmtree(dist_dir, ignore_errors=True)
 
 
-def _pyinstaller_arguments(project_dir: Path) -> list[str]:
+def _pyinstaller_arguments(project_dir: Path, app_name: str) -> list[str]:
     """生成可复现的 PyInstaller 命令参数。
 
     Args:
         project_dir: SoftHertz Tool 仓库根目录。
+        app_name: PyInstaller ``--name``，通常为 ``SoftHertz_Tool-<version>``。
 
     Returns:
         传给 ``PyInstaller.__main__.run`` 的参数列表。Windows 额外嵌入 ICO，
@@ -65,7 +92,7 @@ def _pyinstaller_arguments(project_dir: Path) -> list[str]:
         str(entrypoint),
         "--noconfirm",
         "--clean",
-        f"--name={APP_NAME}",
+        f"--name={app_name}",
         "--windowed",
         "--onefile",
         f"--paths={source_dir}",
@@ -85,11 +112,18 @@ def main() -> None:
 
     Returns:
         无返回值；PyInstaller 构建失败时异常原样向上传播。
+
+    Notes:
+        产物名为 ``SoftHertz_Tool-<version>.<ext>``；版本来自
+        ``SOFTHERTZ_VERSION`` 环境变量，缺省 ``0.0.0+dev``。
     """
 
     project_dir = _project_directory()
+    version = _resolve_version()
+    app_name = _app_name(version)
     _clean_build_outputs(project_dir)
-    run(_pyinstaller_arguments(project_dir))
+    print(f"构建版本: {version} -> 产物: {app_name}")
+    run(_pyinstaller_arguments(project_dir, app_name))
 
 
 if __name__ == "__main__":

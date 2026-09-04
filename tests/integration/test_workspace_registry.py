@@ -15,6 +15,7 @@ from soft_hertz_tool.identity import (
     SETTINGS_APPLICATION,
     SETTINGS_ORGANIZATION,
     create_application_settings,
+    display_name_with_version,
     load_device_model,
 )
 from soft_hertz_tool.app.main_window import MainWindow
@@ -66,7 +67,7 @@ def test_main_window_switches_and_shuts_down_workspaces(tmp_path):
     settings = _ini_settings(tmp_path / f"{SETTINGS_ORGANIZATION}_{SETTINGS_APPLICATION}.ini")
     legacy_settings = _ini_settings(tmp_path / "legacy.ini")
     window = MainWindow(settings=settings, legacy_settings=legacy_settings)
-    assert window.windowTitle() == PRODUCT_DISPLAY_NAME
+    assert window.windowTitle() == display_name_with_version()
     assert window.pages.count() == 3
     assert not window.workspaces[1].panel._telemetry_timer.isActive()
     window.model_combo.setCurrentIndex(1)
