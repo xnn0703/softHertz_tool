@@ -148,6 +148,32 @@ def test_status_report_decode_full_payload():
     assert decoded["tx_beam_h"] == 314
 
 
+@pytest.mark.parametrize("temperatures", [(-100, -1, -400), (0, 350, -250)])
+def test_status_report_temperature_wire_offsets(qt_app, temperatures):
+    """独立按固件载荷偏移验证温度符号、界面显示和模拟器构帧。"""
+    payload = bytearray(43)
+    temperature_keys = ("conv_temp_x10", "tx_array_temp_x10", "rx_array_temp_x10")
+    beam_keys = ("tx_beam_h", "tx_beam_v", "rx_beam_h", "rx_beam_v")
+    for offset, value in zip((27, 29, 31), temperatures):
+        payload[offset:offset + 2] = value.to_bytes(2, "big", signed=True)
+    for offset, value in zip((33, 35, 37, 39), (0, 1, 2048, 4095)):
+        payload[offset:offset + 2] = value.to_bytes(2, "big")
+    frame = protocol.encode_frame(protocol.CMD_STATUS_REPORT, bytes(payload))
+    parsed, message = protocol.parse_response(frame)
+    assert message == "OK" and parsed is not None
+    decoded = parsed["decoded"]
+    assert tuple(decoded[key] for key in temperature_keys) == temperatures
+    assert tuple(decoded[key] for key in beam_keys) == (0, 1, 2048, 4095)
+    panel = KaRfUnitPanel()
+    try:
+        for key, value in zip(temperature_keys, temperatures):
+            assert panel._format_status_value(key, decoded[key]) == f"{value / 10:.1f} °C"
+    finally:
+        panel.shutdown()
+    fields = {key: decoded[key] for key in protocol.STATUS_REPORT_FIELDS}
+    assert protocol.build_status_report(**fields) == frame
+
+
 def test_response_with_bad_payload_length_is_rejected():
     # 错长度的 0x30 帧应被 parse_response 拒绝
     bad_payload = b"\x00" * 42  # STATUS_REPORT 必须为 43 B

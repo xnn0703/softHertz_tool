@@ -81,7 +81,8 @@ TX_RF_MAX_MHZ = 31000
 # 0x30 STATUS_REPORT 固定 payload 长度。
 STATUS_REPORT_PAYLOAD_LEN = 43
 # STATUS_REPORT payload 字段及大端格式串。
-_STATUS_REPORT_FORMAT = ">IHBBBH" + "H" * 12 + "hhh" + "BB"
+# payload[27:33] 为三路 int16 温度（0.1°C），其后四路波束为 uint16。
+_STATUS_REPORT_FORMAT = ">IHBBBH" + "H" * 8 + "hhh" + "HHHHBB"
 
 # 字段名（用于 STATUS_REPORT 解码）。
 STATUS_REPORT_FIELDS = (
