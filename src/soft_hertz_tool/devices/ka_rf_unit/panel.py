@@ -297,6 +297,8 @@ class KaRfUnitPanel(QFrame):
                 spin.setDecimals(2)
                 spin.setRange(0, maximum)
                 spin.setSuffix("°")
+                # Windows 字体与步进按钮可能需要比 macOS 更宽的输入区域。
+                spin.setFixedWidth(max(110, spin.sizeHint().width()))
                 self.internal_angles.append(spin)
                 row.addWidget(spin)
             row.addStretch()
@@ -329,6 +331,7 @@ class KaRfUnitPanel(QFrame):
                 spin.setRange(0, maximum)
                 spin.setSingleStep(0.5)
                 spin.setSuffix(" dB")
+                spin.setFixedWidth(max(100, spin.sizeHint().width()))
                 self.array_att_inputs.append(spin)
                 row.addWidget(spin)
             button = QPushButton("0x46 设置")

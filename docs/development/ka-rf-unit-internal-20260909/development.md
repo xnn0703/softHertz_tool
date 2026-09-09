@@ -31,3 +31,9 @@
 内部 PA/IF 同行限宽，TX/RX 行列左右排列，角度与 TA/RA 双列分组；全部信号与输入顺序保留。
 未修改 protocol、driver、simulator 或固件。新增回归修复前失败、修复后通过；全套 234 passed。
 离屏截图已检查，原生 Windows/缩放验收独立保留。
+
+## Windows 发布布局修正
+
+v3.1.6 CI 的布局回归发现 Windows 角度输入 sizeHint 为 120 px，超过原固定 110 px。
+角度与衰减输入在设置范围和单位后采用 max(原紧凑宽度, sizeHint)；保留防裁切回归。
+后续发布使用 v3.1.7，v3.1.6 未生成 EXE。
