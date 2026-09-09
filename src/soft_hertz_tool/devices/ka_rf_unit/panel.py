@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Callable, Dict, Optional, Tuple
 
-from PySide6.QtCore import Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -22,8 +22,10 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSpinBox,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -31,6 +33,35 @@ from PySide6.QtWidgets import (
 from soft_hertz_tool.devices.ka_rf_unit import protocol
 from soft_hertz_tool.devices.ka_rf_unit.driver import KaRfUnitDriver
 from soft_hertz_tool.shared.ui.serial_connection import SerialConnectionWidget
+
+
+class _CommandTabs(QTabWidget):
+    """保留 Qt 标签栏尺寸，仅由当前命令页决定内容高度。"""
+
+    def sizeHint(self) -> QSize:
+        """以当前页替换 Qt 默认采用的最高页面。"""
+        size = super().sizeHint()
+        if self.currentWidget() is not None:
+            height = max(self.widget(i).sizeHint().height() for i in range(self.count()))
+            size.setHeight(size.height() - height + self.currentWidget().sizeHint().height())
+        return size
+
+    def minimumSizeHint(self) -> QSize:
+        """隐藏页不抬高当前页的最小高度。"""
+        size = super().minimumSizeHint()
+        if self.currentWidget() is not None:
+            height = max(self.widget(i).minimumSizeHint().height() for i in range(self.count()))
+            size.setHeight(size.height() - height + self.currentWidget().minimumSizeHint().height())
+        return size
+
+    def heightForWidth(self, width: int) -> int:
+        """按当前页宽度计算换行状态的高度，保留标签栏边框。"""
+        page = self.currentWidget()
+        if page is None:
+            return super().heightForWidth(width)
+        chrome = self.sizeHint().height() - page.sizeHint().height()
+        content = page.heightForWidth(max(0, width - 4)) if page.hasHeightForWidth() else -1
+        return chrome + max(page.minimumSizeHint().height(), content, page.sizeHint().height())
 
 
 BAUD_RATES = (460800, 921600)
@@ -143,7 +174,17 @@ class KaRfUnitPanel(QFrame):
         right_layout.addStretch()
         columns.addWidget(left_col, 1)
         columns.addWidget(right_col, 1)
-        outer.addLayout(columns)
+        command_tabs = self.command_tabs = _CommandTabs()
+        command_tabs.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        customer_page = QWidget()
+        customer_page.setLayout(columns)
+        command_tabs.addTab(customer_page, "客户控制")
+        self.internal_group = self._create_internal_group()
+        command_tabs.addTab(self.internal_group, "内部功能测试")
+        self.internal_group.setEnabled(False)
+        command_tabs.currentChanged.connect(self._resize_command_page)
+        self._resize_command_page(0)
+        outer.addWidget(command_tabs)
 
         outer.addWidget(self._create_status_group())
         outer.addWidget(self._create_log_group())
@@ -162,6 +203,11 @@ class KaRfUnitPanel(QFrame):
         self._scan_current_phi = 0.0
         self._scan_skipped = 0
 
+    @Slot(int)
+    def _resize_command_page(self, index: int) -> None:
+        """切换后通知外层重新采用当前页高度。"""
+        self.command_tabs.updateGeometry()
+
     def _create_serial_group(self) -> QGroupBox:
         """创建串口连接栏与上报频率指示。"""
         group = QGroupBox("串口设置")
@@ -174,6 +220,194 @@ class KaRfUnitPanel(QFrame):
         self.report_rate_label.setMinimumWidth(160)
         row.addWidget(self.report_rate_label)
         return group
+
+    def _create_internal_group(self) -> QGroupBox:
+        """内部测试使用同一串口；行列与 PA/IF 独立，角度由固件计算。"""
+        group = QGroupBox("内部测试 0x40–0x47 · 本次上电有效")
+        grid = QGridLayout(group)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
+        switches = QHBoxLayout()
+        self.internal_switches = {}
+        for name, method in (("PA", "set_pa_enabled"), ("TX IF", "set_tx_if_enabled"),
+                             ("RX IF", "set_rx_if_enabled")):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(name))
+            switch = QComboBox()
+            switch.setFixedWidth(100)
+            for text, value in ENABLE_OPTIONS:
+                switch.addItem(text, value)
+            self.internal_switches[name] = switch
+            row.addWidget(switch)
+            button = QPushButton("设置")
+            button.setFixedWidth(70)
+            button.clicked.connect(lambda checked=False, m=method, w=switch:
+                                   self._safe_send(lambda driver: getattr(driver, m)(bool(w.currentData()))))
+            row.addWidget(button)
+            switches.addLayout(row)
+            switches.addSpacing(20)
+        switches.addStretch()
+        grid.addLayout(switches, 0, 0, 1, 2)
+        self.internal_target = QComboBox()
+        self.internal_target.setFixedWidth(110)
+        for name, mask in (("TX + RX", 3), ("TX", 1), ("RX", 2)):
+            self.internal_target.addItem(name, mask)
+        target_row = QHBoxLayout()
+        target_row.addWidget(QLabel("行列 / 角度目标"))
+        target_row.addWidget(self.internal_target)
+        target_row.addStretch()
+        grid.addLayout(target_row, 1, 0, 1, 2)
+        self.internal_masks = {}
+        for mask_index, key in enumerate(("TX 行", "TX 列", "RX 行", "RX 列")):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(key))
+            boxes = []
+            for bit in range(8):
+                box = QCheckBox(str(bit))
+                box.setChecked(True)
+                boxes.append(box)
+                row.addWidget(box)
+            self.internal_masks[key] = boxes
+            for label, value in (("全开", True), ("全关", False)):
+                button = QPushButton(label)
+                button.setFixedWidth(60)
+                button.clicked.connect(lambda checked=False, items=boxes, v=value: self._set_mask_boxes(items, v))
+                row.addWidget(button)
+            row.addStretch()
+            grid.addLayout(row, 2 + mask_index % 2, mask_index // 2)
+        mask_button = QPushButton("0x43 设置选中阵面的行列")
+        mask_button.clicked.connect(self._apply_internal_mask)
+        target_row.insertWidget(2, mask_button)
+        target_row.insertWidget(3, QLabel("bit0–7 为芯片行列；行与列同时使能才开启交点"))
+        angles = QGroupBox("0x44 角度波束")
+        angle_layout = QVBoxLayout(angles)
+        attenuation = QGroupBox("0x46 TA / RA 阵列衰减")
+        att_layout = QVBoxLayout(attenuation)
+        grid.addWidget(angles, 4, 0)
+        grid.addWidget(attenuation, 4, 1)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        self.internal_angles = []
+        for side in ("TX", "RX"):
+            row = QHBoxLayout()
+            for axis, maximum in (("θ 离轴角", 90.0), ("φ 方位角", 359.99)):
+                row.addWidget(QLabel(f"{side} {axis}"))
+                spin = QDoubleSpinBox()
+                spin.setFixedWidth(110)
+                spin.setDecimals(2)
+                spin.setRange(0, maximum)
+                spin.setSuffix("°")
+                self.internal_angles.append(spin)
+                row.addWidget(spin)
+            row.addStretch()
+            angle_layout.addLayout(row)
+        angle_button = QPushButton("0x44 设置角度")
+        angle_button.clicked.connect(self._apply_internal_angles)
+        angle_actions = QHBoxLayout()
+        angle_actions.addWidget(angle_button)
+        angle_layout.addLayout(angle_actions)
+        self.internal_rf_label = QLabel("主控按最近接受的 0x10 RF 换算；改频后需重发角度")
+        angle_layout.addWidget(self.internal_rf_label)
+        query = QPushButton("0x45 查询控制状态")
+        query.clicked.connect(self._query_internal_status)
+        angle_actions.addWidget(query)
+        angle_actions.addStretch()
+        self.internal_status_label = QLabel("尚未查询；OK 表示请求已提交，查询值表示主控发送快照")
+        self.internal_status_label.setWordWrap(True)
+        self.internal_status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        angle_layout.addWidget(self.internal_status_label)
+        angle_layout.addStretch()
+        self.array_att_inputs = []
+        for side, name in enumerate(("TA 发射阵列", "RA 接收阵列")):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(name))
+            for label, maximum in (("干路", 8.0), ("支路", 7.5)):
+                row.addWidget(QLabel(label))
+                spin = QDoubleSpinBox()
+                spin.setFixedWidth(100)
+                spin.setDecimals(1)
+                spin.setRange(0, maximum)
+                spin.setSingleStep(0.5)
+                spin.setSuffix(" dB")
+                self.array_att_inputs.append(spin)
+                row.addWidget(spin)
+            button = QPushButton("0x46 设置")
+            button.clicked.connect(lambda checked=False, mask=1 << side: self._apply_array_attenuation(mask))
+            row.addWidget(button)
+            row.addStretch()
+            att_layout.addLayout(row)
+        query_att = QPushButton("0x47 查询阵列衰减")
+        query_att.clicked.connect(self._query_array_attenuation)
+        att_layout.addWidget(query_att, 0, Qt.AlignLeft)
+        att_layout.addWidget(QLabel("BF0 干路 0/8 dB；BF1 干路及支路 0–7.5 dB，步进 0.5"))
+        self.array_att_status_label = QLabel("尚未查询 BF 类型和衰减发送记录")
+        self.array_att_status_label.setWordWrap(True)
+        att_layout.addWidget(self.array_att_status_label)
+        att_layout.addStretch()
+        return group
+
+    @Slot(int)
+    def _apply_array_attenuation(self, target: int) -> None:
+        """通过 Driver 提交 TA/RA，不改变变频衰减或其他内部控制。"""
+        self._safe_send(lambda driver: driver.set_array_attenuation(
+            target, *(spin.value() for spin in self.array_att_inputs)))
+
+    @Slot()
+    def _query_array_attenuation(self) -> None:
+        """请求一次阵列衰减快照，不自动重发设置。"""
+        self._safe_send(lambda driver: driver.query_array_attenuation())
+
+    def _on_array_attenuation(self, driver: KaRfUnitDriver, generation: int, status: dict) -> None:
+        """只显示当前连接代际的 BF 和发送记录，不回填操作输入。"""
+        if driver is not self._driver or generation != self._connection_generation:
+            return
+        lines = []
+        for side, name in enumerate(("tx", "rx")):
+            bf = f"BF{status[name + '_bf']}" if status["bf_valid_mask"] & (1 << side) else "BF 未知"
+            sent = (f"干路 {status[name + '_common'] * 0.5:g} / 支路 {status[name + '_branch'] * 0.5:g} dB"
+                    if status["attenuation_sent_valid_mask"] & (1 << side) else "缺少有效发送记录")
+            lines.append(f"{name.upper()} {bf}：{sent}")
+        self.array_att_status_label.setText("；".join(lines) + "（最近发送，非 RF 回读）")
+
+    @staticmethod
+    def _set_mask_boxes(boxes: list, enabled: bool) -> None:
+        """只修改待发送的行列选择，不发送命令。"""
+        for box in boxes:
+            box.setChecked(enabled)
+
+    @Slot()
+    def _apply_internal_mask(self) -> None:
+        """经 Driver 提交当前行列位。"""
+        masks = [sum(1 << i for i, box in enumerate(boxes) if box.isChecked())
+                 for boxes in self.internal_masks.values()]
+        self._safe_send(lambda driver: driver.set_array_mask(self.internal_target.currentData(), *masks))
+
+    @Slot()
+    def _apply_internal_angles(self) -> None:
+        """经 Driver 提交角度值，保留未选中的阵面。"""
+        self._safe_send(lambda driver: driver.set_beam_angles(
+            self.internal_target.currentData(), *(spin.value() for spin in self.internal_angles)))
+
+    @Slot()
+    def _query_internal_status(self) -> None:
+        """主动读取软件发送快照。"""
+        self._safe_send(lambda driver: driver.query_internal_status())
+
+    def _on_internal_status(self, driver: KaRfUnitDriver, generation: int, status: dict) -> None:
+        """显示当前连接的请求/发送快照，不回填操作控件。"""
+        if not self._is_current(driver, generation):
+            return
+        items = []
+        for bit, name in enumerate(("PA", "TX IF", "RX IF", "TX阵列", "RX阵列")):
+            requested = "开" if status["requested_flags"] & (1 << bit) else "关"
+            sent = ("开" if status["sent_value_flags"] & (1 << bit) else "关") if status["sent_valid_flags"] & (1 << bit) else "未确认"
+            items.append(f"{name} 请求{requested} / 发送{sent}")
+        masks = []
+        for side in ("tx", "rx"):
+            masks.append(f"{side.upper()}行列 请求 {status[side + '_requested_rows']:02X}/{status[side + '_requested_cols']:02X}"
+                         f" → 发送 {status[side + '_sent_rows']:02X}/{status[side + '_sent_cols']:02X}")
+        self.internal_status_label.setText(time.strftime("%H:%M:%S") + " 快照（非硬件回读）\n" +
+                                           "  |  ".join(items) + "\n" + "  |  ".join(masks))
 
     def _create_freq_group(self) -> QGroupBox:
         """创建 0x10 频点与极化控件（2 行：RX 一行，TX 一行；右侧"设置"按钮独占列）。"""
@@ -586,6 +820,12 @@ class KaRfUnitPanel(QFrame):
                 current, token, status
             )
         )
+        driver.internal_status_signal.connect(
+            lambda status, current=driver, token=generation: self._on_internal_status(current, token, status)
+        )
+        driver.array_attenuation_signal.connect(
+            lambda status, current=driver, token=generation: self._on_array_attenuation(current, token, status)
+        )
         driver.report_rate_signal.connect(
             lambda rate, current=driver, token=generation: self._on_driver_report_rate(
                 current, token, rate
@@ -616,12 +856,16 @@ class KaRfUnitPanel(QFrame):
         if not self._is_current(driver, generation):
             return
         if success:
+            self.internal_group.setEnabled(True)
+            self.internal_status_label.setText("新连接，尚未查询内部状态")
+            self.array_att_status_label.setText("新连接，尚未查询 BF 和衰减")
             self.connection.set_connected(message)
             self._latest_status = None
             self._last_status_time = 0.0
             self.report_rate_label.setText("0x30 上报频率: 等待数据")
             self.report_rate_label.setStyleSheet("color:#666;")
         else:
+            self.internal_group.setEnabled(False)
             self.connection.set_disconnected(message)
 
     def _on_driver_log(
@@ -662,6 +906,9 @@ class KaRfUnitPanel(QFrame):
     def _on_driver_finished(self, driver: KaRfUnitDriver) -> None:
         """Driver 线程结束后清理当前引用和 Qt 对象。"""
         if driver is self._driver:
+            self.internal_group.setEnabled(False)
+            self.internal_status_label.setText("已断开，快照失效")
+            self.array_att_status_label.setText("已断开，衰减快照失效")
             self._driver = None
             self.connection.set_disconnected("串口已关闭")
             self._latest_status = None
@@ -684,6 +931,9 @@ class KaRfUnitPanel(QFrame):
     def _stop_driver(self) -> bool:
         """停止并释放当前 Driver，停止超时时保留对象供操作员重试。"""
         driver = self._driver
+        self.internal_group.setEnabled(False)
+        self.internal_status_label.setText("已断开，快照失效")
+        self.array_att_status_label.setText("已断开，衰减快照失效")
         self._connection_generation += 1
         if driver is not None:
             self.connection.set_stopping()
@@ -1070,6 +1320,9 @@ class KaRfUnitPanel(QFrame):
         status = self._latest_status
         if not status:
             return
+        self.internal_rf_label.setText(
+            f"主控最近发送 RF：TX {status.get('tx_rf_mhz', '--')} / RX {status.get('rx_rf_mhz', '--')} MHz；"
+            "角度使用最近接受的 0x10 配置，改频后需重发")
         for key, (row, col_value) in self._row_index.items():
             if key not in status:
                 continue

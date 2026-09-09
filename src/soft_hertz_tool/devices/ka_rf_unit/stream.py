@@ -55,7 +55,11 @@ class FrameStreamParser:
                 try:
                     next_magic = self.buffer.index(FRAME_MAGIC)
                 except ValueError:
-                    next_magic = len(self.buffer)
+                    # 保留分包末尾的 P/PS，下一块可能接成 PSA。
+                    keep = 2 if self.buffer.endswith(FRAME_MAGIC[:2]) else 1 if self.buffer.endswith(FRAME_MAGIC[:1]) else 0
+                    next_magic = len(self.buffer) - keep
+                if next_magic == 0:
+                    break
                 garbage = bytes(self.buffer[:next_magic])
                 del self.buffer[:next_magic]
                 events.append(StreamEvent("garbage", garbage, message="异常字节已丢弃"))

@@ -6,7 +6,7 @@ SoftHertz Tool 是面向 SoftHertz 设备的跨平台串口调试上位机。项
 
 - `AFDTR`：组合 KaUDC004A、AFDT1024（1024 发射阵列）和 AFDR1024（1024 接收阵列）。
 - `AFD01_QS`：配置 AFD01_QS，接收实时状态，并配置、显示 TX/RX 有效子阵档位。
-- `KA_RF_UNIT`：配置 Ka 波段射频单元，发送 7 个控制命令（频点与极化、衰减、阵列使能、波束、外参、上报频率），解析并展示 `0x30 STATUS_REPORT`。
+- `KA_RF_UNIT`：配置 Ka 波段射频单元，支持客户控制、`0x30 STATUS_REPORT` 及独立 PA、中频 TX/RX、行列、角度波束、TA/RA 阵列衰减和内部状态查询（`0x40..0x47`）。
 
 ## 名称约定
 
@@ -60,6 +60,9 @@ AFDT1024/AFDR1024 支持一条总线连接多个子阵：
 - 不支持阵列命令的固件只降级阵列功能，不影响其他 QS 指令。
 
 ### KA_RF_UNIT 工作区
+
+“内部功能测试”标签页提供独立开关、行列位、角度输入及查询；请求值与最近发送记录分开展示。
+完整合同见 [内部测试协议](docs/protocols/readable-notes/ka-rf-unit-internal-20260909.md)。
 
 - 支持 V1 控制命令：`0x10` 频点与收发极化、`0x11` 变频衰减、`0x12/0x13` TX/RX 阵列使能、`0x14` 波束（target mask 同时下发 TX/RX）、`0x15` 外参时钟（10/50 MHz）、`0x20` 主动上报频率（0~200 Hz，0 表示关闭）；
 - 解析 `0x30 STATUS_REPORT`（43 B payload / 51 B 完整帧），包含 uptime、conv_lock_mask、PA/TX/RX 使能、上报频率、整机软件版本、收发 RF/LO、衰减、外参、三处温度（int16/10）和四路原始 BeamH/V；

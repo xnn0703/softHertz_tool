@@ -33,6 +33,23 @@ CMD_SET_BEAM = 0x14
 CMD_SET_EXT_REF = 0x15
 CMD_SET_REPORT_HZ = 0x20
 CMD_STATUS_REPORT = 0x30
+CMD_SET_PA = 0x40
+CMD_SET_TX_IF = 0x41
+CMD_SET_RX_IF = 0x42
+CMD_SET_ARRAY_MASK = 0x43
+CMD_SET_BEAM_ANGLES = 0x44
+CMD_GET_INTERNAL_STATUS = 0x45
+RES_INTERNAL_STATUS = 0xC5
+CMD_SET_ARRAY_ATT = 0x46
+CMD_GET_ARRAY_ATT = 0x47
+RES_ARRAY_ATT = 0xC7
+ARRAY_ATT_FIELDS = ("result", "snapshot_version", "bf_valid_mask", "tx_bf", "rx_bf",
+                    "attenuation_sent_valid_mask", "tx_common", "tx_branch", "rx_common", "rx_branch")
+INTERNAL_STATUS_FIELDS = (
+    "result", "snapshot_version", "requested_flags", "sent_valid_flags", "sent_value_flags",
+    "tx_requested_rows", "tx_requested_cols", "rx_requested_rows", "rx_requested_cols",
+    "tx_sent_rows", "tx_sent_cols", "rx_sent_rows", "rx_sent_cols",
+)
 
 # 响应命令号（命令字 | 0x80）。
 RES_SET_CONV_FREQ = 0x90
@@ -120,7 +137,16 @@ CMD_NAMES = {
     CMD_SET_EXT_REF: "SET_EXT_REF",
     CMD_SET_REPORT_HZ: "SET_REPORT_HZ",
     CMD_STATUS_REPORT: "STATUS_REPORT",
+    CMD_SET_PA: "INTERNAL_SET_PA",
+    CMD_SET_TX_IF: "INTERNAL_SET_TX_IF",
+    CMD_SET_RX_IF: "INTERNAL_SET_RX_IF",
+    CMD_SET_ARRAY_MASK: "INTERNAL_SET_ARRAY_MASK",
+    CMD_SET_BEAM_ANGLES: "INTERNAL_SET_BEAM_ANGLES",
+    CMD_GET_INTERNAL_STATUS: "INTERNAL_GET_STATUS",
+    CMD_SET_ARRAY_ATT: "INTERNAL_SET_ARRAY_ATT",
+    CMD_GET_ARRAY_ATT: "INTERNAL_GET_ARRAY_ATT",
 }
+CMD_NAMES.update({cmd | 0x80: name + "_RESULT" for cmd, name in tuple(CMD_NAMES.items()) if cmd != CMD_STATUS_REPORT})
 
 RESULT_NAMES = {
     RESULT_OK: "OK",
@@ -427,16 +453,127 @@ def decode_payload(command: int, payload: bytes) -> Dict[str, Any]:
         decoded["conv_lock"] = decode_lock_mask(decoded["conv_lock_mask"])
         return decoded
 
+    if command == RES_ARRAY_ATT and len(payload) == 10:
+        values = dict(zip(ARRAY_ATT_FIELDS, payload))
+        if payload[0] != RESULT_OK or payload[1] != 1 or payload[2] & ~3 or payload[5] & ~3:
+            raise ValueError("阵列衰减快照版本或有效位非法")
+        for side in range(2):
+            if payload[2] & (1 << side) and payload[3 + side] not in (0, 1):
+                raise ValueError("阵列 BF 类型非法")
+            if payload[5] & (1 << side) and (payload[6 + side * 2] > 16 or payload[7 + side * 2] > 15):
+                raise ValueError("阵列衰减发送值越界")
+        values["name"] = "OK"
+        return values
+    if command == RES_INTERNAL_STATUS and len(payload) == 13:
+        values = dict(zip(INTERNAL_STATUS_FIELDS, payload))
+        if values["result"] != RESULT_OK or values["snapshot_version"] != 1:
+            raise ValueError("内部状态结果或快照版本无效")
+        if any(values[key] & ~0x1F for key in ("requested_flags", "sent_valid_flags", "sent_value_flags")):
+            raise ValueError("内部状态标志含保留位")
+        values["name"] = "OK"
+        return values
     if command in (RES_SET_CONV_FREQ, RES_SET_CONV_ATT, RES_SET_TX_EN, RES_SET_RX_EN,
-                   RES_SET_BEAM, RES_SET_EXT_REF, RES_SET_REPORT_HZ):
+                   RES_SET_BEAM, RES_SET_EXT_REF, RES_SET_REPORT_HZ) or 0xC0 <= command <= 0xC7:
         if len(payload) != 1:
             raise ValueError(f"0x{command:02X} 响应载荷长度应为 1，实际 {len(payload)}")
         result = payload[0]
         if result not in RESULT_NAMES:
             raise ValueError(f"非法结果码 0x{result:02X}")
+        if command == RES_INTERNAL_STATUS and result == RESULT_OK:
+            raise ValueError("内部状态成功响应必须包含 13 字节快照")
+        if command == RES_ARRAY_ATT and result == RESULT_OK:
+            raise ValueError("阵列衰减成功响应必须包含 10 字节快照")
         return {"result": result, "name": RESULT_NAMES[result]}
 
     return {"hex": payload.hex(" ").upper()}
+
+
+def validate_internal_payload(command: int, payload: bytes) -> int:
+    """验证内部请求长度和字段；只验证选中阵面的角度，返回正式 result。"""
+    lengths = {CMD_SET_PA: 1, CMD_SET_TX_IF: 1, CMD_SET_RX_IF: 1,
+               CMD_SET_ARRAY_MASK: 5, CMD_SET_BEAM_ANGLES: 9, CMD_GET_INTERNAL_STATUS: 0,
+               CMD_SET_ARRAY_ATT: 5, CMD_GET_ARRAY_ATT: 0}
+    if command not in lengths:
+        return RESULT_UNSUPPORTED
+    if len(payload) != lengths[command]:
+        return RESULT_BAD_LENGTH
+    if command in (CMD_GET_INTERNAL_STATUS, CMD_GET_ARRAY_ATT):
+        return RESULT_OK
+    if command <= CMD_SET_RX_IF:
+        return RESULT_OK if payload[0] <= 1 else RESULT_OUT_OF_RANGE
+    if payload[0] not in (1, 2, 3):
+        return RESULT_OUT_OF_RANGE
+    if command == CMD_SET_ARRAY_ATT:
+        for side in range(2):
+            if payload[0] & (1 << side) and (payload[1 + side * 2] > 16 or payload[2 + side * 2] > 15):
+                return RESULT_OUT_OF_RANGE
+    if command == CMD_SET_BEAM_ANGLES:
+        for side in range(2):
+            if payload[0] & (1 << side):
+                if be16_read(payload, 1 + side * 4) > 9000 or be16_read(payload, 3 + side * 4) > 35999:
+                    return RESULT_OUT_OF_RANGE
+    return RESULT_OK
+
+
+def build_internal_switch(command: int, enabled: bool) -> bytes:
+    """构建独立 PA/TX IF/RX IF 开关；非法命令或非 0/1 值抛出 ValueError。"""
+    if command not in (CMD_SET_PA, CMD_SET_TX_IF, CMD_SET_RX_IF) or enabled not in (False, True):
+        raise ValueError("内部开关仅接受 PA/TX IF/RX IF 和 0/1")
+    return encode_frame(command, bytes([int(enabled)]))
+
+
+def build_array_mask(target: int, tx_rows: int, tx_cols: int, rx_rows: int, rx_cols: int) -> bytes:
+    """构建 0x43；行列为各 8 位芯片 mask，保留未选中阵面。"""
+    if target not in (1, 2, 3) or any(not isinstance(v, int) or not 0 <= v <= 255
+                                   for v in (tx_rows, tx_cols, rx_rows, rx_cols)):
+        raise ValueError("阵面目标须为 1/2/3，行列 mask 须为 0..255")
+    return encode_frame(CMD_SET_ARRAY_MASK, bytes([target, tx_rows, tx_cols, rx_rows, rx_cols]))
+
+
+def build_beam_angles(target: int, tx_theta: float, tx_phi: float, rx_theta: float, rx_phi: float) -> bytes:
+    """发送 0x44 角度请求；输入度，量化到 0.01°，由固件按当前 RF 换算。"""
+    if target not in (1, 2, 3):
+        raise ValueError("阵面目标须为 1/2/3")
+    values = [0, 0, 0, 0]
+    for side, pair in enumerate(((tx_theta, tx_phi), (rx_theta, rx_phi))):
+        if not target & (1 << side):
+            continue
+        for axis, (value, maximum) in enumerate(zip(pair, (90.0, 359.99))):
+            if not math.isfinite(value) or not 0 <= value <= maximum:
+                raise ValueError("θ 范围 0..90°，φ 范围 0..359.99°")
+            values[side * 2 + axis] = math.floor(value * 100 + 0.5)
+    return encode_frame(CMD_SET_BEAM_ANGLES, struct.pack(">BHHHH", target, *values))
+
+
+def build_internal_status_query() -> bytes:
+    """查询内部请求和主控最近发送快照，无载荷。"""
+    return encode_frame(CMD_GET_INTERNAL_STATUS, b"")
+
+
+def array_attenuation_valid(bf: int, common_step: int, branch_step: int) -> bool:
+    """按 BF0/BF1 校验 0.5 dB 整数步数；未知 BF 返回 False。"""
+    return (0 <= branch_step <= 15 and
+            ((bf == 0 and common_step in (0, 16)) or (bf == 1 and 0 <= common_step <= 15)))
+
+
+def build_array_attenuation(target: int, tx_common: float, tx_branch: float,
+                            rx_common: float, rx_branch: float) -> bytes:
+    """输入 dB 构建 0x46；只检查选中侧，最终 BF 范围由固件校验。"""
+    if target not in (1, 2, 3):
+        raise ValueError("阵面目标须为 1/2/3")
+    values = [0, 0, 0, 0]
+    for side, pair in enumerate(((tx_common, tx_branch), (rx_common, rx_branch))):
+        if target & (1 << side):
+            for axis, value in enumerate(pair):
+                if not math.isfinite(value) or not 0 <= value <= (8 if axis == 0 else 7.5) or value * 2 != round(value * 2):
+                    raise ValueError("阵列干路 0..8 dB、支路 0..7.5 dB，步进 0.5 dB；干路还须符合实际 BF 类型")
+                values[side * 2 + axis] = round(value * 2)
+    return encode_frame(CMD_SET_ARRAY_ATT, bytes([target, *values]))
+
+
+def build_array_attenuation_query() -> bytes:
+    """查询当前 BF 类型和最近衰减发送记录。"""
+    return encode_frame(CMD_GET_ARRAY_ATT, b"")
 
 
 def build_set_conv_freq(

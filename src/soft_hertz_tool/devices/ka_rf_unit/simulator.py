@@ -33,8 +33,16 @@ class KaRfUnitDeviceSimulator:
         self.started = time.monotonic()
         self.report_hz = DEFAULT_REPORT_HZ
         self.tx_enabled = False
-        self.rx_enabled = False
+        self.rx_enabled = True
         self.pa_enabled = False
+        self.tx_if_enabled = True
+        self.rx_if_enabled = True
+        self.tx_rows = self.tx_cols = 0
+        self.rx_rows = self.rx_cols = 255
+        self.array_bf = [0, 1]  # 明确的模拟器画像，非真实设备类型推断。
+        self.array_bf_valid = 3
+        self.array_att_valid = 0
+        self.array_att = [0, 0, 0, 0]
         self.rx_rf_mhz = 19966
         self.rx_lo_mhz = 19250
         self.tx_rf_mhz = 29500
@@ -58,7 +66,7 @@ class KaRfUnitDeviceSimulator:
             解码校验通过的完整 STATUS_REPAY payload 字节。
         """
         uptime_ms = int((time.monotonic() - self.started) * 1000) & 0xFFFFFFFF
-        lock_mask = 0x0007 if self.ext_ref_mhz else 0x0001
+        lock_mask = 1 | (2 if self.rx_if_enabled else 0) | (4 if self.tx_if_enabled else 0)
         payload = protocol.build_status_report(
             uptime_ms=uptime_ms,
             conv_lock_mask=lock_mask,
@@ -139,7 +147,10 @@ class KaRfUnitDeviceSimulator:
         """处理 ``0x12 SET_TX_EN`` 载荷并返回结果码。"""
         if len(payload) != 1:
             return protocol.RESULT_BAD_LENGTH
+        if payload[0] > 1:
+            return protocol.RESULT_OUT_OF_RANGE
         self.tx_enabled = bool(payload[0])
+        self.tx_rows = self.tx_cols = 255 if self.tx_enabled else 0
         # 按硬件合同：TX 阵列开启后才允许 PA；关闭 TX 时关闭 PA。
         if self.tx_enabled:
             self.pa_enabled = True
@@ -151,7 +162,10 @@ class KaRfUnitDeviceSimulator:
         """处理 ``0x13 SET_RX_EN`` 载荷并返回结果码。"""
         if len(payload) != 1:
             return protocol.RESULT_BAD_LENGTH
+        if payload[0] > 1:
+            return protocol.RESULT_OUT_OF_RANGE
         self.rx_enabled = bool(payload[0])
+        self.rx_rows = self.rx_cols = 255 if self.rx_enabled else 0
         return protocol.RESULT_OK
 
     def _apply_set_beam(self, payload: bytes) -> int:
@@ -169,7 +183,10 @@ class KaRfUnitDeviceSimulator:
         )
         if any(b > protocol.BEAM_CODE_MAX for b in beams):
             return protocol.RESULT_OUT_OF_RANGE
-        self.tx_beam_h, self.tx_beam_v, self.rx_beam_h, self.rx_beam_v = beams
+        if target & protocol.BEAM_TARGET_TX:
+            self.tx_beam_h, self.tx_beam_v = beams[:2]
+        if target & protocol.BEAM_TARGET_RX:
+            self.rx_beam_h, self.rx_beam_v = beams[2:]
         return protocol.RESULT_OK
 
     def _apply_set_ext_ref(self, payload: bytes) -> int:
@@ -199,7 +216,16 @@ class KaRfUnitDeviceSimulator:
                 continue
             command = event.parsed["command"]
             payload = event.parsed["payload"]
-            if command == protocol.CMD_SET_CONV_FREQ:
+            if protocol.CMD_SET_PA <= command <= protocol.CMD_GET_ARRAY_ATT:
+                result = self._apply_internal(command, payload)
+                if command == protocol.CMD_GET_INTERNAL_STATUS and result == protocol.RESULT_OK:
+                    self.serial.write(protocol.encode_frame(protocol.RES_INTERNAL_STATUS, self._internal_payload()))
+                    continue
+                if command == protocol.CMD_GET_ARRAY_ATT and result == protocol.RESULT_OK:
+                    self.serial.write(protocol.encode_frame(protocol.RES_ARRAY_ATT, bytes((
+                        0, 1, self.array_bf_valid, *self.array_bf, self.array_att_valid, *self.array_att))))
+                    continue
+            elif command == protocol.CMD_SET_CONV_FREQ:
                 result = self._apply_set_conv_freq(payload)
             elif command == protocol.CMD_SET_CONV_ATT:
                 result = self._apply_set_conv_att(payload)
@@ -217,6 +243,56 @@ class KaRfUnitDeviceSimulator:
                 # 0x30 等其它命令不响应。
                 continue
             self._write_response(command, result)
+
+    def _internal_payload(self) -> bytes:
+        """模拟立即完成的发送快照；仅用于软件链路验证。"""
+        flags = (int(self.pa_enabled) | (int(self.tx_if_enabled) << 1) | (int(self.rx_if_enabled) << 2)
+                 | (int(self.tx_enabled) << 3) | (int(self.rx_enabled) << 4))
+        masks = (self.tx_rows, self.tx_cols, self.rx_rows, self.rx_cols)
+        return bytes((protocol.RESULT_OK, 1, flags, 31, flags, *masks, *masks))
+
+    def _apply_internal(self, command: int, payload: bytes) -> int:
+        """应用已收到的内部测试请求，范围验证复用正式协议。"""
+        result = protocol.validate_internal_payload(command, payload)
+        if result != protocol.RESULT_OK:
+            return result
+        if command == protocol.CMD_SET_ARRAY_ATT:
+            for side in range(2):
+                if payload[0] & (1 << side):
+                    if not self.array_bf_valid & (1 << side):
+                        return protocol.RESULT_UNSUPPORTED
+                    if not protocol.array_attenuation_valid(self.array_bf[side], *payload[1 + side * 2:3 + side * 2]):
+                        return protocol.RESULT_OUT_OF_RANGE
+            for side in range(2):
+                if payload[0] & (1 << side):
+                    self.array_att[side * 2:side * 2 + 2] = payload[1 + side * 2:3 + side * 2]
+                    self.array_att_valid |= 1 << side
+            return protocol.RESULT_OK
+        if command == protocol.CMD_SET_PA:
+            self.pa_enabled = bool(payload[0])
+        elif command == protocol.CMD_SET_TX_IF:
+            self.tx_if_enabled = bool(payload[0])
+        elif command == protocol.CMD_SET_RX_IF:
+            self.rx_if_enabled = bool(payload[0])
+        elif command == protocol.CMD_SET_ARRAY_MASK:
+            if payload[0] & protocol.BEAM_TARGET_TX:
+                self.tx_rows, self.tx_cols = payload[1:3]
+                self.tx_enabled = bool(self.tx_rows and self.tx_cols)
+            if payload[0] & protocol.BEAM_TARGET_RX:
+                self.rx_rows, self.rx_cols = payload[3:5]
+                self.rx_enabled = bool(self.rx_rows and self.rx_cols)
+        elif command == protocol.CMD_SET_BEAM_ANGLES:
+            for side, rf, f0 in ((0, self.tx_rf_mhz, protocol.TX_BEAM_F0),
+                                  (1, self.rx_rf_mhz, protocol.RX_BEAM_F0)):
+                if payload[0] & (1 << side):
+                    theta = protocol.be16_read(payload, 1 + side * 4) / 100
+                    phi = protocol.be16_read(payload, 3 + side * 4) / 100
+                    h, v = protocol.compute_beam_pair(theta, phi, freq_mhz=rf, f0=f0)
+                    if side == 0:
+                        self.tx_beam_h, self.tx_beam_v = h, v
+                    else:
+                        self.rx_beam_h, self.rx_beam_v = h, v
+        return protocol.RESULT_OK
 
     def run(self, duration: float = 0.0) -> None:
         """以目标 ``report_hz`` 发送 0x30 并处理控制命令。

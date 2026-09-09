@@ -21,6 +21,8 @@ class KaRfUnitDriver(SerialThread):
     """独占串口并把原始帧转换为 KA_RF_UNIT 语义状态。"""
 
     status_signal = Signal(dict)
+    internal_status_signal = Signal(dict)
+    array_attenuation_signal = Signal(dict)
     result_signal = Signal(int, str)  # command, result_name
     report_rate_signal = Signal(float)
 
@@ -82,6 +84,10 @@ class KaRfUnitDriver(SerialThread):
             )
             if command == protocol.CMD_STATUS_REPORT:
                 self._emit_status(decoded)
+            elif command == protocol.RES_INTERNAL_STATUS and "snapshot_version" in decoded:
+                self.internal_status_signal.emit(decoded)
+            elif command == protocol.RES_ARRAY_ATT and "snapshot_version" in decoded:
+                self.array_attenuation_signal.emit(decoded)
             elif "result" in decoded:
                 self.result_signal.emit(command, decoded["name"])
 
@@ -227,6 +233,39 @@ class KaRfUnitDriver(SerialThread):
             self._status_count = 0
             self._last_status_time = 0.0
         return stopped
+
+    def set_pa_enabled(self, enabled: bool) -> bool:
+        """独立控制 TX 阵列推动 PA，返回入队结果。"""
+        return self._queue_frame(protocol.build_internal_switch(protocol.CMD_SET_PA, enabled))
+
+    def set_tx_if_enabled(self, enabled: bool) -> bool:
+        """独立控制变频 TX IF，返回入队结果。"""
+        return self._queue_frame(protocol.build_internal_switch(protocol.CMD_SET_TX_IF, enabled))
+
+    def set_rx_if_enabled(self, enabled: bool) -> bool:
+        """独立控制变频 RX IF，返回入队结果。"""
+        return self._queue_frame(protocol.build_internal_switch(protocol.CMD_SET_RX_IF, enabled))
+
+    def set_array_mask(self, target: int, tx_rows: int, tx_cols: int, rx_rows: int, rx_cols: int) -> bool:
+        """发送独立芯片行列 mask，返回入队结果。"""
+        return self._queue_frame(protocol.build_array_mask(target, tx_rows, tx_cols, rx_rows, rx_cols))
+
+    def set_beam_angles(self, target: int, tx_theta: float, tx_phi: float, rx_theta: float, rx_phi: float) -> bool:
+        """发送度值，由主控换算；不使用本机 raw 波束转换。"""
+        return self._queue_frame(protocol.build_beam_angles(target, tx_theta, tx_phi, rx_theta, rx_phi))
+
+    def query_internal_status(self) -> bool:
+        """查询内部控制快照，不代表硬件回读。"""
+        return self._queue_frame(protocol.build_internal_status_query())
+
+    def set_array_attenuation(self, target: int, tx_common: float, tx_branch: float,
+                              rx_common: float, rx_branch: float) -> bool:
+        """设置阵列 TA/RA 干路和支路衰减，输入单位 dB。"""
+        return self._queue_frame(protocol.build_array_attenuation(target, tx_common, tx_branch, rx_common, rx_branch))
+
+    def query_array_attenuation(self) -> bool:
+        """查询阵列 BF 类型及最近衰减发送记录。"""
+        return self._queue_frame(protocol.build_array_attenuation_query())
 
 
 # 与目录名及其他设备 Driver 命名保持一致的简写。
