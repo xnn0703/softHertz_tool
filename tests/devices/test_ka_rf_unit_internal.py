@@ -60,7 +60,7 @@ def test_independent_controls_and_customer_override():
     sim.process_input(p.build_set_tx_en(False))
     assert not sim.pa_enabled and sim.tx_rows == sim.tx_cols == 0
     assert not sim.tx_if_enabled and not sim.rx_if_enabled
-    sim.process_input(p.build_set_conv_freq(19966, 0, 31000, 0, 1, 0))
+    sim.process_input(p.build_set_conv_freq(19966, 18250, 31000, 29050, 1, 0))
     sim.process_input(p.build_set_ext_ref(50))
     assert not sim.tx_if_enabled and not sim.rx_if_enabled
     sim.process_input(p.build_internal_status_query())

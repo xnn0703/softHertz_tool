@@ -105,8 +105,8 @@ class KaRfUnitDeviceSimulator:
         response_cmd = command | 0x80
         self.serial.write(protocol.encode_frame(response_cmd, bytes([result])))
 
-    def _apply_set_conv_freq(self, payload: bytes) -> int:
-        """处理 ``0x10 SET_CONV_FREQ`` 载荷并返回结果码。"""
+    def _apply_set_conv_freq(self, payload: bytes, *, fixed: bool) -> int:
+        """校验固定/自由配置后整体更新；拒绝时保留全部旧值。"""
         if len(payload) != 10:
             return protocol.RESULT_BAD_LENGTH
         rx_rf = protocol.be16_read(payload, 0)
@@ -118,6 +118,8 @@ class KaRfUnitDeviceSimulator:
         if not protocol.rx_rf_valid(rx_rf) or not protocol.tx_rf_valid(tx_rf):
             return protocol.RESULT_OUT_OF_RANGE
         if not protocol.rx_lo_valid(rx_lo) or not protocol.tx_lo_valid(tx_lo):
+            return protocol.RESULT_OUT_OF_RANGE
+        if fixed and (rx_lo != protocol.fixed_lo(rx_rf, tx=False) or tx_lo != protocol.fixed_lo(tx_rf, tx=True)):
             return protocol.RESULT_OUT_OF_RANGE
         if rx_polar not in (protocol.POLAR_LEFT_CIRCLE, protocol.POLAR_RIGHT_CIRCLE):
             return protocol.RESULT_OUT_OF_RANGE
@@ -225,8 +227,8 @@ class KaRfUnitDeviceSimulator:
                     self.serial.write(protocol.encode_frame(protocol.RES_ARRAY_ATT, bytes((
                         0, 1, self.array_bf_valid, *self.array_bf, self.array_att_valid, *self.array_att))))
                     continue
-            elif command == protocol.CMD_SET_CONV_FREQ:
-                result = self._apply_set_conv_freq(payload)
+            elif command in (protocol.CMD_SET_CONV_FREQ, protocol.CMD_SET_CONV_FREQ_FREE):
+                result = self._apply_set_conv_freq(payload, fixed=command == protocol.CMD_SET_CONV_FREQ)
             elif command == protocol.CMD_SET_CONV_ATT:
                 result = self._apply_set_conv_att(payload)
             elif command == protocol.CMD_SET_TX_EN:

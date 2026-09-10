@@ -308,7 +308,7 @@ class KaRfUnitPanel(QFrame):
         angle_actions = QHBoxLayout()
         angle_actions.addWidget(angle_button)
         angle_layout.addLayout(angle_actions)
-        self.internal_rf_label = QLabel("主控按最近接受的 0x10 RF 换算；改频后需重发角度")
+        self.internal_rf_label = QLabel("主控按最近接受的 0x10/0x16 RF 换算；改频后需重发角度")
         angle_layout.addWidget(self.internal_rf_label)
         query = QPushButton("0x45 查询控制状态")
         query.clicked.connect(self._query_internal_status)
@@ -414,7 +414,7 @@ class KaRfUnitPanel(QFrame):
 
     def _create_freq_group(self) -> QGroupBox:
         """创建 0x10 频点与极化控件（2 行：RX 一行，TX 一行；右侧"设置"按钮独占列）。"""
-        group = QGroupBox("0x10 频点与极化配置")
+        group = QGroupBox("0x10 / 0x16 频点与极化配置")
         grid = QGridLayout(group)
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(4)
@@ -461,6 +461,14 @@ class KaRfUnitPanel(QFrame):
         apply.clicked.connect(self._apply_freq)
         apply.setMinimumWidth(72)
         grid.addWidget(apply, 0, 7, 2, 1)
+        self.freq_mode = QComboBox()
+        self.freq_mode.addItem("0x10 固定本振", False)
+        self.freq_mode.addItem("0x16 自由配置", True)
+        grid.addWidget(self.freq_mode, 2, 0, 1, 4, Qt.AlignLeft)
+        self.freq_mode.currentIndexChanged.connect(self._update_freq_mode)
+        self.rx_rf.valueChanged.connect(self._update_fixed_lo)
+        self.tx_rf.valueChanged.connect(self._update_fixed_lo)
+        self._update_freq_mode(0)
         # 列 6 作为中间留白列
         grid.setColumnStretch(6, 1)
         return group
@@ -966,13 +974,14 @@ class KaRfUnitPanel(QFrame):
 
     @Slot()
     def _apply_freq(self) -> None:
-        """读取页面输入并发送 0x10 频点与极化配置。"""
+        """按页面模式发送固定 0x10 或自由 0x16 频点配置。"""
 
         def action(driver: KaRfUnitDriver) -> bool:
             """在 Driver 上发送 0x10 频点与极化配置。"""
             rx_lo = self._parse_lo(self.rx_lo, label="RX LO")
             tx_lo = self._parse_lo(self.tx_lo, label="TX LO")
-            return driver.set_conv_freq(
+            send = driver.set_conv_freq_free if self.freq_mode.currentData() else driver.set_conv_freq
+            return send(
                 self.rx_rf.value(),
                 rx_lo,
                 self.tx_rf.value(),
@@ -982,6 +991,24 @@ class KaRfUnitPanel(QFrame):
             )
 
         self._safe_send(action)
+
+    @Slot(int)
+    def _update_freq_mode(self, index: int) -> None:
+        """切换模式只更新输入，不向设备发送；自由模式初始为 AUTO。"""
+        free = bool(self.freq_mode.currentData())
+        for edit in (self.rx_lo, self.tx_lo):
+            edit.setReadOnly(not free)
+            if free:
+                edit.clear()
+        self._update_fixed_lo(0)
+
+    @Slot(int)
+    def _update_fixed_lo(self, value: int) -> None:
+        """固定模式按两侧 RF 实时展示明确 LO，不发送 AUTO 值。"""
+        if self.freq_mode.currentData():
+            return
+        self.rx_lo.setText(str(protocol.fixed_lo(self.rx_rf.value(), tx=False)))
+        self.tx_lo.setText(str(protocol.fixed_lo(self.tx_rf.value(), tx=True)))
 
     @Slot()
     def _apply_att(self) -> None:
@@ -1325,7 +1352,7 @@ class KaRfUnitPanel(QFrame):
             return
         self.internal_rf_label.setText(
             f"主控最近发送 RF：TX {status.get('tx_rf_mhz', '--')} / RX {status.get('rx_rf_mhz', '--')} MHz；"
-            "角度使用最近接受的 0x10 配置，改频后需重发")
+            "角度使用最近接受的 0x10/0x16 配置，改频后需重发")
         for key, (row, col_value) in self._row_index.items():
             if key not in status:
                 continue

@@ -38,8 +38,8 @@ def test_crc16_ccitt_false_matches_reference_vector():
 def test_builders_match_doc_samples():
     expected_frames = {
         "0x10": (
-            protocol.build_set_conv_freq(19966, 0, 29500, 0, 1, 0),
-            "50 53 41 01 10 0A 4D FE 00 00 73 3C 00 00 01 00 C0 E9",
+            protocol.build_set_conv_freq(19966, 18250, 29500, 28050, 1, 0),
+            "50 53 41 01 10 0A 4D FE 47 4A 73 3C 6D 92 01 00 A9 8E",
         ),
         "0x11": (
             protocol.build_set_conv_att(12.5, 4.5),
@@ -195,7 +195,7 @@ def test_parse_response_rejects_bad_magic_and_crc():
     assert parsed is None
     assert "帧头" in message
 
-    valid = protocol.build_set_conv_freq(19966, 0, 29500, 0, 0, 0)
+    valid = protocol.build_set_conv_freq(19966, 18250, 29500, 28050, 0, 0)
     broken = bytearray(valid)
     broken[-1] ^= 0xFF
     parsed, message = protocol.parse_response(bytes(broken))
@@ -391,7 +391,7 @@ def test_panel_apply_freq_sends_default_0x10_values(qt_app):
 
     panel._apply_freq()
 
-    assert spy.calls == [(19966, 0, 29500, 0, 0, 0)]
+    assert spy.calls == [(19966, 18250, 29500, 28050, 0, 0)]
 
 
 # ---------------------------------------------------------------------------
@@ -421,7 +421,7 @@ def test_simulator_acknowledges_valid_commands_and_rejects_invalid():
     sim.report_hz = 0  # 关闭主动上报，便于断言
 
     # 0x10 合法
-    sim.process_input(protocol.build_set_conv_freq(19966, 0, 29500, 0, 0, 0))
+    sim.process_input(protocol.build_set_conv_freq(19966, 18250, 29500, 28050, 0, 0))
     # 0x11 合法
     sim.process_input(protocol.build_set_conv_att(10.0, 5.0))
     # 0x12 开启 TX

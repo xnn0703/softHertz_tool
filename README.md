@@ -61,6 +61,10 @@ AFDT1024/AFDR1024 支持一条总线连接多个子阵：
 
 ### KA_RF_UNIT 工作区
 
+2026-09-10 频点合同：0x10/0x90 仅接受与 RF 分段匹配的固定 LO（拒绝 AUTO=0）；
+原自由配置迁移至 0x16/0x96，支持 AUTO/0 和范围内偶数手动 LO。
+界面提供固定/自由模式切换，详见 [频点协议补充](docs/protocols/readable-notes/ka-rf-unit-frequency-20260910.md)。
+
 “内部功能测试”标签页提供独立开关、行列位、角度输入及查询；请求值与最近发送记录分开展示。
 完整合同见 [内部测试协议](docs/protocols/readable-notes/ka-rf-unit-internal-20260909.md)。
 

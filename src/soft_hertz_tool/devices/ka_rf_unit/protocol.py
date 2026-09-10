@@ -31,6 +31,7 @@ CMD_SET_TX_EN = 0x12
 CMD_SET_RX_EN = 0x13
 CMD_SET_BEAM = 0x14
 CMD_SET_EXT_REF = 0x15
+CMD_SET_CONV_FREQ_FREE = 0x16
 CMD_SET_REPORT_HZ = 0x20
 CMD_STATUS_REPORT = 0x30
 CMD_SET_PA = 0x40
@@ -58,6 +59,7 @@ RES_SET_TX_EN = 0x92
 RES_SET_RX_EN = 0x93
 RES_SET_BEAM = 0x94
 RES_SET_EXT_REF = 0x95
+RES_SET_CONV_FREQ_FREE = 0x96
 RES_SET_REPORT_HZ = 0xA0
 RES_STATUS_REPORT = 0xB0
 
@@ -135,6 +137,7 @@ CMD_NAMES = {
     CMD_SET_RX_EN: "SET_RX_EN",
     CMD_SET_BEAM: "SET_BEAM",
     CMD_SET_EXT_REF: "SET_EXT_REF",
+    CMD_SET_CONV_FREQ_FREE: "SET_CONV_FREQ_FREE",
     CMD_SET_REPORT_HZ: "SET_REPORT_HZ",
     CMD_STATUS_REPORT: "STATUS_REPORT",
     CMD_SET_PA: "INTERNAL_SET_PA",
@@ -473,7 +476,7 @@ def decode_payload(command: int, payload: bytes) -> Dict[str, Any]:
         values["name"] = "OK"
         return values
     if command in (RES_SET_CONV_FREQ, RES_SET_CONV_ATT, RES_SET_TX_EN, RES_SET_RX_EN,
-                   RES_SET_BEAM, RES_SET_EXT_REF, RES_SET_REPORT_HZ) or 0xC0 <= command <= 0xC7:
+                   RES_SET_BEAM, RES_SET_EXT_REF, RES_SET_CONV_FREQ_FREE, RES_SET_REPORT_HZ) or 0xC0 <= command <= 0xC7:
         if len(payload) != 1:
             raise ValueError(f"0x{command:02X} 响应载荷长度应为 1，实际 {len(payload)}")
         result = payload[0]
@@ -576,7 +579,27 @@ def build_array_attenuation_query() -> bytes:
     return encode_frame(CMD_GET_ARRAY_ATT, b"")
 
 
+def fixed_lo(rf_mhz: int, *, tx: bool) -> int:
+    """按客户 RF 分段返回固定 LO（MHz）；非法 RF 抛出 ValueError。"""
+    if not (tx_rf_valid(rf_mhz) if tx else rx_rf_valid(rf_mhz)):
+        raise ValueError("RF 超出允许范围")
+    bands = ((28350, 26550), (29000, 27400), (30000, 28050), (31001, 29050)) if tx else (
+        (18200, 16750), (19200, 17250), (20200, 18250), (21201, 19250))
+    return next(lo for upper, lo in bands if rf_mhz < upper)
+
+
 def build_set_conv_freq(
+    rx_rf_mhz: int, rx_lo_mhz: int, tx_rf_mhz: int, tx_lo_mhz: int,
+    rx_polar: int, tx_polar: int,
+) -> bytes:
+    """构建 0x10 固定配置；LO 必须匹配 RF 分段，含 AUTO 在内的不匹配值抛出 ValueError。"""
+    if rx_lo_mhz != fixed_lo(rx_rf_mhz, tx=False) or tx_lo_mhz != fixed_lo(tx_rf_mhz, tx=True):
+        raise ValueError("0x10 LO 必须与 RF 分段匹配，不支持 AUTO；自由配置请用 0x16")
+    free_frame = build_set_conv_freq_free(rx_rf_mhz, rx_lo_mhz, tx_rf_mhz, tx_lo_mhz, rx_polar, tx_polar)
+    return encode_frame(CMD_SET_CONV_FREQ, free_frame[6:-2])
+
+
+def build_set_conv_freq_free(
     rx_rf_mhz: int,
     rx_lo_mhz: int,
     tx_rf_mhz: int,
@@ -584,7 +607,7 @@ def build_set_conv_freq(
     rx_polar: int,
     tx_polar: int,
 ) -> bytes:
-    """构建 ``0x10 SET_CONV_FREQ`` 帧。
+    """构建 ``0x16 SET_CONV_FREQ_FREE`` 帧。
 
     Args:
         rx_rf_mhz: 接收 RF 频率，``17700~21200``。
@@ -595,7 +618,7 @@ def build_set_conv_freq(
         tx_polar: TX 极化，0=左旋、1=右旋。
 
     Returns:
-        完整 ``0x10`` 请求帧。
+        完整 ``0x16`` 请求帧。
 
     Raises:
         ValueError: 任一字段超出协议范围。
@@ -621,7 +644,7 @@ def build_set_conv_freq(
         + be16_write(tx_lo_mhz)
         + bytes([rx_polar, tx_polar])
     )
-    return encode_frame(CMD_SET_CONV_FREQ, payload)
+    return encode_frame(CMD_SET_CONV_FREQ_FREE, payload)
 
 
 def build_set_conv_att(rx_att_db: float, tx_att_db: float) -> bytes:

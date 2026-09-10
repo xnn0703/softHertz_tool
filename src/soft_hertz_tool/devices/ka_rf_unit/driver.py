@@ -144,8 +144,8 @@ class KaRfUnitDriver(SerialThread):
         """发送 0x10 频点与极化配置。
 
         Args:
-            rx_rf_mhz / rx_lo_mhz: 接收 RF/LO 频率，0 表示 LO 自动。
-            tx_rf_mhz / tx_lo_mhz: 发射 RF/LO 频率，0 表示 LO 自动。
+            rx_rf_mhz / rx_lo_mhz: 接收 RF/LO 频率，LO 必须匹配 RF 分段。
+            tx_rf_mhz / tx_lo_mhz: 发射 RF/LO 频率，LO 必须匹配 RF 分段。
             rx_polar / tx_polar: 极化，0=左旋、1=右旋。
 
         Returns:
@@ -164,6 +164,14 @@ class KaRfUnitDriver(SerialThread):
                 tx_polar,
             )
         )
+
+    def set_conv_freq_free(
+        self, rx_rf_mhz: int, rx_lo_mhz: int, tx_rf_mhz: int, tx_lo_mhz: int,
+        rx_polar: int, tx_polar: int,
+    ) -> bool:
+        """发送 0x16 自由配置；LO=0 为 AUTO，非法参数抛出 ValueError，返回是否成功入队。"""
+        return self._queue_frame(protocol.build_set_conv_freq_free(
+            rx_rf_mhz, rx_lo_mhz, tx_rf_mhz, tx_lo_mhz, rx_polar, tx_polar))
 
     def set_conv_att(self, rx_att_db: float, tx_att_db: float) -> bool:
         """发送 0x11 变频衰减。
