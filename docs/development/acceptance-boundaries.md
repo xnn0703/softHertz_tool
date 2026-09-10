@@ -204,3 +204,14 @@ Windows 版本：
 - 日志总容量和保留策略。
 
 主机或模拟器结果可以作为前置证据，但不能关闭这些门槛。
+
+## 10. 客户流量模拟新增验收
+
+AFDT1024 / AFDR1024 客户流量模拟的软件与主机伪终端结果见
+[专题开发记录](afdtr-customer-traffic/development.md)。仍需单独完成 Windows 原生 EXE、
+两线 RS485 自动方向切换、逻辑分析仪线路间隔与真实设备 10 min 回归。
+主机 write 时间和合并写入不能关闭物理零间隙验收。
+
+### AFDR1024 校准结果查询（2026-09-10）
+
+RX 0x9E 已完成源码链路与 offscreen 测试，全量344项通过，新增13项校准查询测试；compileall通过。模拟器回复和状态表布局已验证。AFDT1024待源码确认；真实RX校准回读与Windows原生EXE未验收。详细记录见 [开发记录](afdtr-alignment-query/development.md)。

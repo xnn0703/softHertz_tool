@@ -3,15 +3,25 @@
 from __future__ import annotations
 
 from functools import partial
+from dataclasses import asdict
+from datetime import datetime
+from pathlib import Path
+import threading
+import math
+import time
+import uuid
 from typing import Iterable, Optional, Union
 
-from PySide6.QtCore import QTimer, Signal, Slot
+from PySide6.QtCore import QStandardPaths, QTimer, Signal, Slot
 
 from soft_hertz_tool.devices.afdtr1024 import protocol
 from soft_hertz_tool.devices.afdtr1024.models import BeamSetting, DeviceVariant, SubarrayStatus
 from soft_hertz_tool.devices.afdtr1024.stream import AFDTR1024StreamParser
 from soft_hertz_tool.shared.observability import FrameRecord
 from soft_hertz_tool.shared.transport import SerialThread
+from soft_hertz_tool.identity import default_log_directory
+from soft_hertz_tool.devices.afdtr1024.traffic import TrafficConfig, TrafficEngine
+from soft_hertz_tool.devices.afdtr1024.traffic_recorder import TrafficRecorder
 
 
 class AFDTR1024Driver(SerialThread):
@@ -19,6 +29,7 @@ class AFDTR1024Driver(SerialThread):
 
     status_signal = Signal(dict)
     config_success_signal = Signal(str)
+    traffic_signal = Signal(dict)
 
     def __init__(
         self,
@@ -34,6 +45,169 @@ class AFDTR1024Driver(SerialThread):
         self.stream = AFDTR1024StreamParser()
         self._status_by_id: dict[int, SubarrayStatus] = {}
         self._schedule_generation = 0
+        self._traffic_lock = threading.RLock()
+        self._traffic_owned = False
+        self._normal_writing = False
+        self._traffic_request = None
+        self._traffic_cancel = threading.Event()
+        self._traffic_engine = None
+        self._traffic_recorder = None
+        self._traffic_last_emit_ns = 0
+        self._traffic_run_id = ""
+        self._traffic_read_ns = 0
+        self._traffic_snapshot: dict = {}
+
+    def traffic_snapshot(self) -> dict:
+        """返回最近一次不可变发布快照，供确认断开后保留导出入口。"""
+        with self._traffic_lock:
+            return dict(self._traffic_snapshot)
+
+    def start_traffic(self, config: TrafficConfig, frequency_mhz: float, theta: float,
+                      phi: float, *, directory: Optional[Path] = None) -> str:
+        """非阻塞取得空闲发送队列所有权，冻结配置；返回本次运行 ID。"""
+        config.validate()
+        if not all(math.isfinite(v) for v in (frequency_mhz, theta, phi)):
+            raise ValueError("波束参数必须为有限数值")
+        setting = protocol.make_beam_setting(frequency_mhz, theta, phi, self.variant)
+        beam_id = 0 if config.beam_mode == "broadcast" else config.target_id
+        beam = protocol.build_beam_frame(beam_id, setting, self.variant)
+        with self._traffic_lock:
+            self._require_open()
+            if self._traffic_owned or self._normal_writing or not self._tx_queue.empty():
+                raise ConnectionError("串口发送尚未空闲或客户流量正在运行，请稍后重试")
+            self._traffic_owned = True
+            self._schedule_generation += 1
+            self._traffic_cancel.clear()
+            # 新运行尚在准备记录目录时，串口线程不得看到上轮已停止的状态机并误释放所有权。
+            self._traffic_engine = None
+            self._traffic_recorder = None
+            self._traffic_request = None
+        run_id = uuid.uuid4().hex
+        recorder = None
+        try:
+            if directory is None:
+                docs = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
+                directory = default_log_directory(Path(docs or str(Path.home() / "Documents"))) / "traffic"
+            metadata = {"run_id": run_id, "generation": self._schedule_generation,
+                        "model": self.variant.model_name, "port": self.port_name, "baudrate": self.baudrate,
+                        "serial_format": "8N1", "wall_time": datetime.now().astimezone().isoformat(),
+                        "clock_origin_ns": time.monotonic_ns(), "config": asdict(config),
+                        "timing_contract": "write 起止为主机调用时间；线路间隔未测；回复延迟为完整解析减 write 返回",
+                        "association_limit": "协议无事务号，无法严格区分同指令旧回复；原帧回显也无法排除本地回环"}
+            recorder = TrafficRecorder(Path(directory) / run_id, metadata)
+            with self._traffic_lock:
+                if not self.running or self._stop_event.is_set():
+                    raise ConnectionError("串口已停止，客户流量未开始")
+                self._traffic_run_id = run_id
+                self._traffic_recorder = recorder
+                self._traffic_engine = None
+                self._traffic_request = (config, beam)
+                self._traffic_last_emit_ns = 0
+                self._traffic_snapshot = {}
+            return run_id
+        except Exception:
+            if recorder is not None:
+                recorder.finish({"reason": "start_failed"})
+                recorder.close(0.1)
+            with self._traffic_lock:
+                self._traffic_owned = False
+            raise
+
+    def stop_traffic(self) -> None:
+        """请求所属线程停止，不在 UI 线程修改状态机或关闭串口。"""
+        self._traffic_cancel.set()
+
+    @Slot(bytes)
+    def send_bytes(self, frame: bytes) -> bool:
+        """运行期间从 Driver 边界拒绝所有普通业务发送。"""
+        with self._traffic_lock:
+            if self._traffic_owned:
+                self.log_signal.emit("客户流量模拟独占串口，普通命令未发送")
+                return False
+            return super().send_bytes(frame)
+
+    def _flush_tx(self) -> None:
+        """串口线程执行独占调度，每轮最多一次 write，然后返回接收循环。"""
+        with self._traffic_lock:
+            owned = self._traffic_owned
+            if not owned:
+                self._normal_writing = True
+            request, self._traffic_request = self._traffic_request, None
+        if not owned:
+            try:
+                super()._flush_tx()
+            finally:
+                with self._traffic_lock:
+                    self._normal_writing = False
+            return
+        recorder = self._traffic_recorder
+        if recorder is None:
+            return
+        now = time.monotonic_ns()
+        if request is not None:
+            config, beam = request
+            self._traffic_engine = TrafficEngine(config, self.variant, beam, now, recorder.record)
+        engine = self._traffic_engine
+        if engine is None:
+            return
+        if self._traffic_cancel.is_set() or self._stop_event.is_set():
+            engine.stop("cancelled", now)
+        if recorder.error:
+            engine.stop("record_failure", now)
+        batch = engine.poll(now)
+        if batch is not None:
+            # 停止可在 poll 后到达；未进入 write 的批次不再投递。
+            if self._traffic_cancel.is_set() or self._stop_event.is_set():
+                engine.stop("cancelled", time.monotonic_ns())
+            else:
+                result = self.write_observed(batch.raw)
+                engine.written(batch, *result)
+                for frame in batch.frames:
+                    self.frame_signal.emit(FrameRecord(
+                        self.variant.model_name, self.endpoint, "TX", protocol.command_name(frame[-2]), frame,
+                        f"run={self._traffic_run_id} batch={batch.sequence} write={result[2]}/{len(batch.raw)} "
+                        f"start_ns={result[0]} return_ns={result[1]} {result[3]}",
+                        "ERROR" if result[3] else "INFO"))
+        self._publish_traffic(time.monotonic_ns())
+
+    def _publish_traffic(self, now: int) -> None:
+        """最多 10 Hz 发布快照；后台记录关闭后释放发送所有权。"""
+        engine, recorder = self._traffic_engine, self._traffic_recorder
+        if engine is None or recorder is None:
+            return
+        if not engine.active:
+            recorder.finish(engine.snapshot(now))
+        finished = not engine.active and recorder.finished
+        if finished or now - self._traffic_last_emit_ns >= 100_000_000:
+            self._traffic_last_emit_ns = now
+            snapshot = {**engine.snapshot(now), **recorder.evidence(),
+                        "run_id": self._traffic_run_id, "active": not finished}
+            with self._traffic_lock:
+                self._traffic_snapshot = snapshot
+            self.traffic_signal.emit(snapshot)
+        if finished:
+            with self._traffic_lock:
+                self._traffic_owned = False
+
+    def idle_wait_seconds(self) -> float:
+        """按最近截止时刻缩短空闲等待，不使用 UI 定时器发送。"""
+        engine = self._traffic_engine
+        if self._traffic_owned and engine is not None and engine.active:
+            due = min(engine.due_ns, engine.end_ns)
+            return min(0.001, max(0.0001, (due - time.monotonic_ns()) / 1e9))
+        return super().idle_wait_seconds()
+
+    def on_loop_stopped(self) -> None:
+        """断连也取消运行并有界等待记录线程收尾。"""
+        engine, recorder = self._traffic_engine, self._traffic_recorder
+        now = time.monotonic_ns()
+        if engine is not None:
+            engine.stop("disconnected", now)
+        if recorder is not None:
+            recorder.finish(engine.snapshot(now) if engine else {"reason": "cancelled_before_start"})
+            if not recorder.close(1.0):
+                self.log_signal.emit("客户流量记录仍在收尾，记录未完成")
+        self._publish_traffic(now)
 
     @property
     def endpoint(self) -> str:
@@ -42,6 +216,9 @@ class AFDTR1024Driver(SerialThread):
 
     def handle_bytes(self, data: bytes) -> None:
         """在串口线程拆分输入字节，并发布有效帧或丢弃诊断记录。"""
+        self._traffic_read_ns = time.monotonic_ns()
+        if self._traffic_owned and self._traffic_engine is not None and self._traffic_engine.active:
+            self._traffic_engine.record({"event": "read", "read_ns": self._traffic_read_ns, "bytes": len(data)})
         for event in self.stream.feed(data):
             if event.is_frame:
                 self._process_frame(event.raw)
@@ -57,11 +234,15 @@ class AFDTR1024Driver(SerialThread):
                     "ERROR",
                 )
             )
+            if self._traffic_owned and self._traffic_engine is not None and self._traffic_engine.active:
+                self._traffic_engine.dropped(event.reason, time.monotonic_ns())
             self.log_signal.emit(f"✗ {event.reason}: {event.raw.hex().upper()}")
 
     def _process_frame(self, frame: bytes) -> None:
         """解析一帧协议数据，分派状态回读、波束回读或配置回显。"""
         parsed, message = protocol.parse_response(frame)
+        if self._traffic_owned and self._traffic_engine is not None and self._traffic_engine.active:
+            self._traffic_engine.received(frame, self._traffic_read_ns, time.monotonic_ns())
         addr = parsed.get("addr") if parsed else None
         command = protocol.command_name(addr) if addr is not None else self.variant.value
         self.frame_signal.emit(
@@ -82,6 +263,10 @@ class AFDTR1024Driver(SerialThread):
             return
 
         addr = parsed["addr"]
+        if addr == protocol.ADDR_RX_ALIGNMENT_QUERY and not self.variant.is_tx:
+            info, status_message = protocol.parse_rx_alignment_response(parsed["payload"])
+            self._publish_status(parsed["device_id"], info, status_message, "校准结果")
+            return
         if addr in protocol.STATUS_RETURN_ADDRS:
             parser = (
                 protocol.parse_status_response
@@ -101,6 +286,8 @@ class AFDTR1024Driver(SerialThread):
             self._publish_status(parsed["device_id"], info, status_message, "波束参数")
             return
 
+        if self._traffic_owned:
+            return
         self.log_signal.emit(f"<<< 收到: {frame_hex}")
         if addr in protocol.CONFIG_ECHO_ADDRS:
             name = protocol.command_name(addr)
@@ -136,6 +323,8 @@ class AFDTR1024Driver(SerialThread):
                 f" 频率:{info['freq_mhz']}MHz"
                 f" BeamV:{info['beam_v']} BeamH:{info['beam_h']}"
             )
+        if "align_link_id" in info:
+            detail += " 校准结果 " + " ".join(f"{key[6:]}={value}" for key, value in info.items())
         self.log_signal.emit(detail)
 
     @Slot(bytes)
@@ -143,7 +332,7 @@ class AFDTR1024Driver(SerialThread):
         """把完整帧加入共享串口线程的发送队列。"""
 
         frame = bytes(frame)
-        queued = super().send_bytes(frame)
+        queued = self.send_bytes(frame)
         if not queued:
             return False
         addr = frame[-2] if len(frame) >= 2 else 0
@@ -233,7 +422,7 @@ class AFDTR1024Driver(SerialThread):
         plus_0x80: bool = False,
         interval_ms: int = 50,
     ) -> int:
-        """逐个 ID 发送查询 1/2；定时投递，避免阻塞 UI 线程。"""
+        """逐个 ID 查询状态、波束及 RX 校准结果；定时投递避免阻塞 UI。"""
 
         self._require_open()
         ids: list[int] = []
@@ -253,6 +442,8 @@ class AFDTR1024Driver(SerialThread):
             # +0x80 是“仅本子阵”寻址位；状态缓存仍以低 7 位子阵号归并。
             device_id = (subarray_id + 0x80) & 0xFF if plus_0x80 else subarray_id
             frames.extend(protocol.build_query_frames(device_id, self.variant))
+            if not self.variant.is_tx:
+                frames.append(protocol.build_rx_alignment_query_frame(device_id))
 
         generation = self._schedule_generation
         for index, frame in enumerate(frames):
@@ -271,8 +462,9 @@ class AFDTR1024Driver(SerialThread):
         """在代际仍有效且串口运行时发送延迟查询帧。"""
 
         # stop() 递增代际，使已登记的 QTimer 回调不会向已关闭串口发送数据。
-        if generation == self._schedule_generation and self.running:
-            self.send_frame(frame)
+        with self._traffic_lock:
+            if generation == self._schedule_generation and self.running:
+                self.send_frame(frame)
 
     def status_snapshot(self) -> dict[int, dict]:
         """返回按低 7 位子阵 ID 索引的状态副本，不暴露内部模型。"""
@@ -281,7 +473,13 @@ class AFDTR1024Driver(SerialThread):
     def stop(self, timeout_ms: int = 3000) -> bool:
         """取消待调度查询后停止串口线程，超时时返回 ``False``。"""
         self._schedule_generation += 1
-        return super().stop(timeout_ms)
+        self.stop_traffic()
+        stopped = super().stop(timeout_ms)
+        recorder = self._traffic_recorder
+        if recorder is not None and not recorder.finished:
+            recorder.finish({"reason": "disconnected"})
+            return stopped and recorder.close(0.1)
+        return stopped
 
 
 # 简短别名供 workspace 组装。

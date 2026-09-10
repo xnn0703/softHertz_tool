@@ -28,10 +28,24 @@ from PySide6.QtWidgets import (
 
 from soft_hertz_tool.devices.afdtr1024.driver import AFDTR1024Driver
 from soft_hertz_tool.devices.afdtr1024.models import DeviceVariant
+from soft_hertz_tool.devices.afdtr1024.traffic_panel import TrafficPanel
 from soft_hertz_tool.shared.ui.serial_connection import SerialConnectionWidget
 
 
 BAUD_RATES = (9600, 19200, 38400, 115200, 460800, 921600)
+
+ALIGNMENT_COLUMNS = (
+    ("align_link_id", "LINK_ID"),
+    ("align_temp_offset", "温度偏移"),
+    ("align_init_att", "初始衰减码"),
+    ("align_zcal_en", "ZcalEn"),
+    ("align_ofst_vl", "OFST_VL"),
+    ("align_ofst_hl", "OFST_HL"),
+    ("align_ofst_vr", "OFST_VR"),
+    ("align_ofst_hr", "OFST_HR"),
+    ("align_att_l", "ATT_L"),
+    ("align_att_r", "ATT_R"),
+)
 
 
 class AFDTR1024Panel(QFrame):
@@ -82,8 +96,48 @@ class AFDTR1024Panel(QFrame):
             layout.addWidget(self._create_pa_group())
         layout.addWidget(self._create_polarization_group())
         layout.addWidget(self._create_status_group())
+        self.traffic = TrafficPanel(self.variant)
+        self.traffic.start_requested.connect(self._start_traffic)
+        self.traffic.stop_requested.connect(self._stop_traffic)
+        layout.addWidget(self.traffic)
         layout.addWidget(self._create_log_group())
         layout.addStretch()
+
+    def _set_traffic_active(self, active: bool) -> None:
+        """冻结同串口手工命令入口；Driver 同时执行强制互斥。"""
+        self.traffic.set_active(active)
+        for group in self.findChildren(QGroupBox, options=Qt.FindDirectChildrenOnly):
+            if group is not self.traffic and group.title() not in ("串口设置", "日志"):
+                group.setEnabled(not active)
+
+    @Slot()
+    def _start_traffic(self) -> None:
+        """开始按钮到 Driver 的语义边界，冻结当前波束参数。"""
+        driver = self._active_driver()
+        if driver is None:
+            return
+        try:
+            self.traffic.run_id = driver.start_traffic(
+                self.traffic.config(), float(self.frequency_edit.text()),
+                float(self.theta_edit.text()), float(self.phi_edit.text()))
+            self.traffic.export_button.setEnabled(False)
+            self.traffic.status.setText("正在开始客户流量模拟")
+            self._set_traffic_active(True)
+        except (ValueError, ConnectionError, OSError) as exc:
+            QMessageBox.warning(self, "客户流量模拟", str(exc))
+
+    @Slot()
+    def _stop_traffic(self) -> None:
+        """仅提交停止请求，收到所属线程结束快照后再解锁。"""
+        if self.driver is not None:
+            self.driver.stop_traffic()
+            self.traffic.status.setText("正在停止并保存记录")
+
+    def _on_traffic_snapshot(self, driver: AFDTR1024Driver, generation: int, snapshot: dict) -> None:
+        """用连接及运行代际过滤陈旧的统计快照。"""
+        if self._is_current_driver(driver, generation) and snapshot["run_id"] == self.traffic.run_id:
+            self.traffic.show_snapshot(snapshot)
+            self._set_traffic_active(snapshot["active"])
 
     def _create_subarray_group(self) -> QGroupBox:
         """创建子阵 ID 生成、目标选择和单阵寻址控件。"""
@@ -199,6 +253,21 @@ class AFDTR1024Panel(QFrame):
         for column in range(len(self._status_columns)):
             self.status_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
         layout.addWidget(self.status_table)
+        if not self.variant.is_tx:
+            self.alignment_toggle = QPushButton("校准结果（展开/收起）")
+            self.alignment_toggle.setCheckable(True)
+            self.alignment_toggle.setToolTip("点击查询全部状态时同步查询；校准值保留原始码，温度偏移已减80。")
+            layout.addWidget(self.alignment_toggle)
+            self.alignment_table = QTableWidget(0, 1 + len(ALIGNMENT_COLUMNS))
+            self.alignment_table.setHorizontalHeaderLabels(["ID"] + [label for _, label in ALIGNMENT_COLUMNS])
+            self.alignment_table.verticalHeader().setVisible(False)
+            self.alignment_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            self.alignment_table.setMinimumHeight(140)
+            self.alignment_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+            self.alignment_table.setToolTip("LINK_ID为设备返回值；OFST和ATT为原始校准码，ZcalEn为原始标志。")
+            layout.addWidget(self.alignment_table)
+            self.alignment_table.hide()
+            self.alignment_toggle.toggled.connect(self.alignment_table.setVisible)
         query_button = QPushButton("查询全部状态")
         query_button.clicked.connect(self._query_all_status)
         layout.addWidget(query_button)
@@ -316,6 +385,12 @@ class AFDTR1024Panel(QFrame):
             self.status_table.setItem(row, 0, QTableWidgetItem(self._format_id(device_id)))
             for column in range(1, len(self._status_columns)):
                 self.status_table.setItem(row, column, QTableWidgetItem("N/A"))
+        if not self.variant.is_tx:
+            self.alignment_table.setRowCount(len(ids))
+            for row, device_id in enumerate(ids):
+                self.alignment_table.setItem(row, 0, QTableWidgetItem(self._format_id(device_id)))
+                for column in range(1, 1 + len(ALIGNMENT_COLUMNS)):
+                    self.alignment_table.setItem(row, column, QTableWidgetItem("N/A"))
 
     @Slot(dict)
     def update_status(self, info: dict) -> None:
@@ -326,6 +401,10 @@ class AFDTR1024Panel(QFrame):
         row = self._status_rows.get(int(device_id) & 0x7F)
         if row is None:
             return
+        if not self.variant.is_tx:
+            for column, (key, _) in enumerate(ALIGNMENT_COLUMNS, start=1):
+                if key in info:
+                    self.alignment_table.setItem(row, column, QTableWidgetItem(str(info[key])))
 
         def set_column(name: str, value: object) -> None:
             """仅在该变体拥有目标列时写入当前状态表单元格。"""
@@ -394,6 +473,9 @@ class AFDTR1024Panel(QFrame):
                 )
             )
             driver.frame_signal.connect(self.frame_signal.emit)
+            driver.traffic_signal.connect(
+                lambda snapshot, current=driver, token=generation: self._on_traffic_snapshot(current, token, snapshot)
+            )
             driver.finished.connect(lambda current=driver: self._on_driver_finished(current))
             self.driver = driver
             driver.start()
@@ -453,9 +535,19 @@ class AFDTR1024Panel(QFrame):
     def _on_driver_finished(self, driver: AFDTR1024Driver) -> None:
         """回收已结束 Driver；若仍为当前连接则更新 UI 状态。"""
         if driver is self.driver:
+            self._retain_traffic_result(driver)
             self.driver = None
             self.connection.set_disconnected("串口已关闭")
+            self._set_traffic_active(False)
         driver.deleteLater()
+
+    def _retain_traffic_result(self, driver: AFDTR1024Driver) -> None:
+        """断开后的最终结果直接从已停止 Driver 读取，不依赖旧代际排队信号。"""
+        read_snapshot = getattr(driver, "traffic_snapshot", None)
+        if read_snapshot is not None:
+            snapshot = read_snapshot()
+            if snapshot:
+                self.traffic.show_snapshot(snapshot)
 
     @Slot()
     def _disconnect_driver(self) -> None:
@@ -472,8 +564,10 @@ class AFDTR1024Panel(QFrame):
             if driver.stop() is False:
                 self.connection.set_stop_failed("串口线程停止超时，请重试关闭")
                 return False
+            self._retain_traffic_result(driver)
             self.driver = None
             driver.deleteLater()
+        self._set_traffic_active(False)
         if hasattr(self, "connection"):
             self.connection.set_disconnected()
         return True
@@ -546,7 +640,7 @@ class AFDTR1024Panel(QFrame):
 
     @Slot()
     def _query_all_status(self) -> None:
-        """按当前 ID 列表调度查询 1/查询 2，避免在 UI 线程集中发送。"""
+        """按当前 ID 列表调度状态查询（RX 包含校准结果），避免集中发送。"""
         driver = self._active_driver()
         if driver is None:
             return

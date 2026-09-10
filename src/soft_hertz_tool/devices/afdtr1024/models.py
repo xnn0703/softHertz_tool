@@ -74,6 +74,16 @@ class SubarrayStatus:
     beam_h: Optional[int] = None
     theta: Optional[float] = None
     phi: Optional[float] = None
+    align_link_id: Optional[int] = None
+    align_temp_offset: Optional[int] = None
+    align_init_att: Optional[int] = None
+    align_zcal_en: Optional[int] = None
+    align_ofst_vl: Optional[int] = None
+    align_ofst_hl: Optional[int] = None
+    align_ofst_vr: Optional[int] = None
+    align_ofst_hr: Optional[int] = None
+    align_att_l: Optional[int] = None
+    align_att_r: Optional[int] = None
 
     def update(self, values: Mapping[str, Any]) -> None:
         """只合并已知且非空字段，避免查询 1/2 互相覆盖。"""

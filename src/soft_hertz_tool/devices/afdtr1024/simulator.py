@@ -131,6 +131,8 @@ class AFDTR1024Simulator:
         if subarray_id not in self.ids:
             return []
 
+        if not self.variant.is_tx and addr == protocol.ADDR_RX_ALIGNMENT_QUERY:
+            return [protocol.build_rx_alignment_response_frame(target)]
         if addr == self._status_query_address:
             return [self.build_status_response(subarray_id)]
         if addr == self._beam_query_address:
