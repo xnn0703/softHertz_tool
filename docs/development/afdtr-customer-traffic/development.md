@@ -143,3 +143,7 @@ PTY 集成新增客户非等待模式，保留原两种模式。全量：303 pas
 | AFDT1024 | 5999 / 5999 / 5999 | 118 / 118 | 59 / 59 | 0 | 0 |
 
 命令：`QT_QPA_PLATFORM=offscreen SOFTHERTZ_TRAFFIC_PTY_SECONDS=60 .venv/bin/python -m pytest -q tests/integration/test_afdtr_traffic_pty.py -k addressed_stream`。结果：1 passed, 2 deselected in 60.13s。
+
+## Windows 发布验证（2026-09-10）
+
+v3.1.8 CI 34465617007 在 Python 3.9/3.11 测试读取 summary.json 时出现 cp1252 UnicodeDecodeError；正式 recorder 已使用 UTF-8，修复仅为测试读取显式指定 UTF-8。保留失败标签，以 v3.1.9 重建。隔离阵列发布快照本地316项通过，未包含并行 KA_RF_UNIT 频点功能。

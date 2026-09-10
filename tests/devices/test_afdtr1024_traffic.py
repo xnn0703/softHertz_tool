@@ -206,9 +206,9 @@ def test_driver_real_write_boundary_excludes_manual_and_updates_reply(tmp_path):
     driver._flush_tx()
     driver.on_loop_stopped()
     assert driver._traffic_recorder.close()
-    summary = json.loads((tmp_path / run_id / 'summary.json').read_text())
+    summary = json.loads((tmp_path / run_id / 'summary.json').read_text(encoding="utf-8"))
     assert summary['counts']['matched_replies'] == 1
-    events = [json.loads(l) for l in (tmp_path / run_id / 'events.jsonl').read_text().splitlines()]
+    events = [json.loads(l) for l in (tmp_path / run_id / 'events.jsonl').read_text(encoding="utf-8").splitlines()]
     actual = [ev for ev in events if ev['event'] == 'write']
     assert len(actual) == len(driver.serial.writes)
     assert all(ev['write_return_ns'] >= ev['write_start_ns'] for ev in actual)
@@ -270,10 +270,10 @@ def test_recorder_integrity_and_finish(tmp_path):
         r.record({'event': 'item', 'number': i})
     r.finish({'reason': 'test'})
     assert r.close()
-    summary = json.loads((tmp_path / 'run' / 'summary.json').read_text())
+    summary = json.loads((tmp_path / 'run' / 'summary.json').read_text(encoding="utf-8"))
     assert summary['records_lost'] > 0 and not summary['evidence_complete']
     assert summary['recording_finished']
-    lines = (tmp_path / 'run' / 'events.jsonl').read_text().splitlines()
+    lines = (tmp_path / 'run' / 'events.jsonl').read_text(encoding="utf-8").splitlines()
     assert len(lines) - 1 + summary['records_lost'] == 10000
 
 
@@ -291,10 +291,10 @@ def test_recorder_rotates_without_losing_details(tmp_path):
         r.record({'event': 'example', 'number': i})
     r.finish({'reason': 'test'})
     assert r.close()
-    summary = json.loads((tmp_path / 'rotate' / 'summary.json').read_text())
+    summary = json.loads((tmp_path / 'rotate' / 'summary.json').read_text(encoding="utf-8"))
     assert len(summary['detail_files']) > 1
     events = [json.loads(l) for name in summary['detail_files']
-              for l in (tmp_path / 'rotate' / name).read_text().splitlines()]
+              for l in (tmp_path / 'rotate' / name).read_text(encoding="utf-8").splitlines()]
     assert len(events) == 31 and summary['evidence_complete']
 
 

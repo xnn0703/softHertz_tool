@@ -71,7 +71,7 @@ def test_both_variants_real_pty_with_fragmented_replies(tmp_path, beam_mode):
         for driver, *_ in jobs:
             assert not driver._traffic_owned
             assert driver.stop()
-            summary = json.loads((driver._traffic_recorder.directory / 'summary.json').read_text())
+            summary = json.loads((driver._traffic_recorder.directory / 'summary.json').read_text(encoding="utf-8"))
             counts = summary['counts']
             assert summary['reason'] == 'duration'
             assert counts['queries_written'] == counts['matched_replies'] >= 4
