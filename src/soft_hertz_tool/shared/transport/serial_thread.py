@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 from abc import abstractmethod
 
 from PySide6.QtCore import QThread, Signal, Slot
@@ -94,17 +95,43 @@ class SerialThread(QThread):
                     if data:
                         self.handle_bytes(data)
                 else:
-                    QThread.msleep(self.idle_ms)
+                    self._stop_event.wait(self.idle_wait_seconds())
         except Exception as exc:
             message = f"串口错误: {exc}"
             self.log_signal.emit(message)
             self.opened_signal.emit(False, message)
         finally:
             self.running = False
+            try:
+                self.on_loop_stopped()
+            except Exception as exc:
+                self.log_signal.emit(f"串口任务收尾失败: {exc}")
             serial_port, self.serial = self.serial, None
             if serial_port and serial_port.is_open:
                 serial_port.close()
             self.log_signal.emit("串口已关闭")
+
+    def idle_wait_seconds(self) -> float:
+        """返回可被停止事件打断的空闲等待时长；设备可按截止时间缩短。"""
+        return self.idle_ms / 1000
+
+    def on_loop_stopped(self) -> None:
+        """串口循环结束时在所属线程收尾设备专用任务。"""
+
+    def write_observed(self, data: bytes) -> tuple[int, int, int, str]:
+        """仅在串口线程调用：返回单调 ns 起止、实际字节数与错误，不代表线路发完。"""
+        started = time.monotonic_ns()
+        count = 0
+        error = ""
+        try:
+            if self._stop_event.is_set() or self.serial is None or not self.serial.is_open:
+                raise ConnectionError("串口正在停止或已关闭")
+            count = self.serial.write(data)
+            if count != len(data):
+                error = f"串口短写: {count}/{len(data)}"
+        except Exception as exc:
+            error = str(exc)
+        return started, time.monotonic_ns(), count, error
 
     def _flush_tx(self) -> None:
         """在串口线程中写出本轮允许的待发送帧。

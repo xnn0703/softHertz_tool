@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import os as _os
-
 __all__ = ["__version__"]
 
-# CI 在构建时通过 ``SOFTHERTZ_VERSION`` 环境变量注入 tag 名称（如 ``v3.1.3``），
-# 本地开发或 workflow_dispatch 缺省时回退到 ``0.0.0+dev``，便于与正式版区分。
-__version__ = _os.environ.get("SOFTHERTZ_VERSION") or "0.0.0+dev"
+# 版本号硬编码于本模块，发版时人工同步到当前 tag。
+# 注意：与 ``pyproject.toml`` 的 ``[project] version`` 字段（始终为开发占位
+# ``0.0.0``）和 CI 通过 ``SOFTHERTZ_VERSION`` 注入到 ``packaging/build_windows.py``
+# 的构建期版本号相互独立——前者驱动运行期窗口标题，后两者分别用于包元数据
+# 与 Windows EXE 产物命名。
+__version__ = "3.2.0"

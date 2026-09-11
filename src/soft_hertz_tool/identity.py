@@ -23,8 +23,8 @@ def display_name_with_version() -> str:
     """返回带版本号的客户可见产品名。
 
     Returns:
-        例如 ``"SoftHertz Tool v3.1.3"``；本地开发时为
-        ``"SoftHertz Tool v0.0.0+dev"``。
+        例如 ``"SoftHertz Tool v3.2.0"``。版本号硬编码于
+        :mod:`soft_hertz_tool.__init__`，发版时人工同步。
     """
     return f"{PRODUCT_DISPLAY_NAME} v{__version__}"
 

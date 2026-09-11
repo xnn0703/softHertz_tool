@@ -37,14 +37,17 @@ def test_module_smoke_entrypoint_exits_cleanly():
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
-def test_pyinstaller_arguments_use_root_outputs_and_current_product_name(tmp_path: Path):
+def test_pyinstaller_arguments_use_root_outputs_and_current_product_name(tmp_path: Path, monkeypatch):
     build_windows = _load_build_module()
-    # 默认无 SOFTHERTZ_VERSION 时回退 ``0.0.0+dev``，产物名为 ``SoftHertz_Tool-0.0.0+dev``。
+    # 运行期版本号硬编码于 ``soft_hertz_tool.__init__``；构建期仍由
+    # ``SOFTHERTZ_VERSION`` 环境变量驱动，默认 ``0.0.0+dev``。
+    monkeypatch.setenv("SOFTHERTZ_VERSION", "3.2.0")
     app_name = build_windows._app_name(build_windows._resolve_version())
     arguments = build_windows._pyinstaller_arguments(tmp_path, app_name)
 
     assert f"--name={app_name}" in arguments
     assert app_name.startswith("SoftHertz_Tool-")
+    assert app_name == "SoftHertz_Tool-3.2.0"
     assert "--clean" in arguments
     assert f"--distpath={tmp_path / 'dist'}" in arguments
     assert f"--workpath={tmp_path / 'build' / 'pyinstaller' / 'work'}" in arguments

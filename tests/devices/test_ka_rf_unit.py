@@ -992,42 +992,21 @@ def test_simulator_applies_beam_from_angle_frame():
 
 
 # ---------------------------------------------------------------------------
-# 版本号注入（运行期）
+# 版本号（运行期，硬编码于 soft_hertz_tool.__init__）
 # ---------------------------------------------------------------------------
 
 
-def test_runtime_version_falls_back_to_dev_default(monkeypatch):
-    """未设 SOFTHERTZ_VERSION 时 __version__ 应回退 ``0.0.0+dev``。"""
+def test_runtime_version_is_hardcoded_in_package_init():
+    """``__version__`` 在 :mod:`soft_hertz_tool` 模块内硬编码，不再走环境变量。"""
     import importlib
     import soft_hertz_tool
 
-    monkeypatch.delenv("SOFTHERTZ_VERSION", raising=False)
     reloaded = importlib.reload(soft_hertz_tool)
-    assert reloaded.__version__ == "0.0.0+dev"
+    assert reloaded.__version__ == "3.2.0"
 
 
-def test_runtime_version_uses_env_value(monkeypatch):
-    """CI 在 tag push 时通过 ``SOFTHERTZ_VERSION=v3.1.3`` 注入。"""
-    import importlib
-    import soft_hertz_tool
-
-    monkeypatch.setenv("SOFTHERTZ_VERSION", "v9.9.9")
-    reloaded = importlib.reload(soft_hertz_tool)
-    assert reloaded.__version__ == "v9.9.9"
-
-
-def test_identity_display_name_includes_version(monkeypatch):
+def test_identity_display_name_includes_version():
     """display_name_with_version 应拼接 ``SoftHertz Tool v<version>``。"""
-    import importlib
-    import soft_hertz_tool
     from soft_hertz_tool import identity
 
-    monkeypatch.setenv("SOFTHERTZ_VERSION", "9.9.9")
-    importlib.reload(soft_hertz_tool)
-    importlib.reload(identity)
-    try:
-        assert identity.display_name_with_version() == "SoftHertz Tool v9.9.9"
-    finally:
-        monkeypatch.delenv("SOFTHERTZ_VERSION", raising=False)
-        importlib.reload(soft_hertz_tool)
-        importlib.reload(identity)
+    assert identity.display_name_with_version() == "SoftHertz Tool v3.2.0"

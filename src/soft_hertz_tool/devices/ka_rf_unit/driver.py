@@ -271,6 +271,10 @@ class KaRfUnitDriver(SerialThread):
         """设置阵列 TA/RA 干路和支路衰减，输入单位 dB。"""
         return self._queue_frame(protocol.build_array_attenuation(target, tx_common, tx_branch, rx_common, rx_branch))
 
+    def set_conv_att_persist(self, rx_att_db: float, tx_att_db: float) -> bool:
+        """提交0x48保存并应用双侧变频衰减；返回是否入队，不表示设备已保存。"""
+        return self._queue_frame(protocol.build_set_conv_att_persist(rx_att_db, tx_att_db))
+
     def query_array_attenuation(self) -> bool:
         """查询阵列 BF 类型及最近衰减发送记录。"""
         return self._queue_frame(protocol.build_array_attenuation_query())

@@ -33,7 +33,7 @@ def test_golden_and_every_split(frame, expected):
     (0x44, struct.pack(">BHHHH", 1, 9000, 35999, 65535, 65535), p.RESULT_OK),
     (0x44, struct.pack(">BHHHH", 3, 9000, 35999, 65535, 65535), p.RESULT_OUT_OF_RANGE),
     (0x44, struct.pack(">BHHHH", 1, 9001, 0, 0, 0), p.RESULT_OUT_OF_RANGE),
-    (0x45, b"\x00", p.RESULT_BAD_LENGTH), (0x48, b"", p.RESULT_UNSUPPORTED),
+    (0x45, b"\x00", p.RESULT_BAD_LENGTH), (0x49, b"", p.RESULT_UNSUPPORTED),
 ])
 def test_validation(cmd, data, result):
     assert p.validate_internal_payload(cmd, data) == result

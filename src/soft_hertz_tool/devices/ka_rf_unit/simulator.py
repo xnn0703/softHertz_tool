@@ -48,7 +48,9 @@ class KaRfUnitDeviceSimulator:
         self.tx_rf_mhz = 29500
         self.tx_lo_mhz = 28050
         self.rx_att_x10 = 0
-        self.tx_att_x10 = 0
+        self.tx_att_x10 = 100
+        self.saved_conv_att = (0, 100)
+        self.persistence_available = True  # 模拟存储故障，非真实FRAM证据。
         self.ext_ref_mhz = 10
         self.rx_polar = protocol.POLAR_RIGHT_CIRCLE
         self.tx_polar = protocol.POLAR_LEFT_CIRCLE
@@ -133,7 +135,7 @@ class KaRfUnitDeviceSimulator:
         self.tx_polar = tx_polar
         return protocol.RESULT_OK
 
-    def _apply_set_conv_att(self, payload: bytes) -> int:
+    def _apply_set_conv_att(self, payload: bytes, *, persist: bool = False) -> int:
         """处理 ``0x11 SET_CONV_ATT`` 载荷并返回结果码。"""
         if len(payload) != 4:
             return protocol.RESULT_BAD_LENGTH
@@ -141,6 +143,10 @@ class KaRfUnitDeviceSimulator:
         tx_att = protocol.be16_read(payload, 2)
         if not protocol.conv_att_valid(rx_att) or not protocol.conv_att_valid(tx_att):
             return protocol.RESULT_OUT_OF_RANGE
+        if persist:
+            if not self.persistence_available:
+                return protocol.RESULT_PERSISTENCE_FAILED
+            self.saved_conv_att = (rx_att, tx_att)
         self.rx_att_x10 = rx_att
         self.tx_att_x10 = tx_att
         return protocol.RESULT_OK
@@ -229,8 +235,8 @@ class KaRfUnitDeviceSimulator:
                     continue
             elif command in (protocol.CMD_SET_CONV_FREQ, protocol.CMD_SET_CONV_FREQ_FREE):
                 result = self._apply_set_conv_freq(payload, fixed=command == protocol.CMD_SET_CONV_FREQ)
-            elif command == protocol.CMD_SET_CONV_ATT:
-                result = self._apply_set_conv_att(payload)
+            elif command in (protocol.CMD_SET_CONV_ATT, protocol.CMD_SET_CONV_ATT_PERSIST):
+                result = self._apply_set_conv_att(payload, persist=command == protocol.CMD_SET_CONV_ATT_PERSIST)
             elif command == protocol.CMD_SET_TX_EN:
                 result = self._apply_set_tx_en(payload)
             elif command == protocol.CMD_SET_RX_EN:

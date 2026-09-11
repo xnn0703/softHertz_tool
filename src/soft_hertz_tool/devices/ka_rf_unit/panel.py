@@ -223,7 +223,7 @@ class KaRfUnitPanel(QFrame):
 
     def _create_internal_group(self) -> QGroupBox:
         """内部测试使用同一串口；行列与 PA/IF 独立，角度由固件计算。"""
-        group = QGroupBox("内部测试 0x40–0x47 · 本次上电有效")
+        group = QGroupBox("内部测试 · 0x40–0x47 临时控制 / 0x48 保存变频衰减")
         grid = QGridLayout(group)
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(6)
@@ -347,7 +347,34 @@ class KaRfUnitPanel(QFrame):
         self.array_att_status_label.setWordWrap(True)
         att_layout.addWidget(self.array_att_status_label)
         att_layout.addStretch()
+        persistent = QHBoxLayout()
+        persistent.addWidget(QLabel("0x48 变频衰减（非阵列）"))
+        self.persist_conv_att_inputs = []
+        for label, default in (("RX", 0.0), ("TX", 10.0)):
+            persistent.addWidget(QLabel(label))
+            spin = QDoubleSpinBox()
+            spin.setRange(0, 31.5)
+            spin.setSingleStep(0.5)
+            spin.setDecimals(1)
+            spin.setValue(default)
+            spin.setSuffix(" dB")
+            spin.setMinimumWidth(100)
+            spin.setMaximumWidth(130)
+            self.persist_conv_att_inputs.append(spin)
+            persistent.addWidget(spin)
+        save = QPushButton("保存并应用 RX/TX")
+        save.clicked.connect(self._apply_persistent_conv_att)
+        persistent.addWidget(save)
+        persistent.addWidget(QLabel("重启恢复保存值；客户0x11不保存"))
+        persistent.addStretch()
+        grid.addLayout(persistent, 5, 0, 1, 2)
         return group
+
+    @Slot()
+    def _apply_persistent_conv_att(self) -> None:
+        """通过独立内部命令保存双侧变频衰减，客户临时控件保持原语义。"""
+        self._safe_send(lambda driver: driver.set_conv_att_persist(
+            *(spin.value() for spin in self.persist_conv_att_inputs)))
 
     @Slot(int)
     def _apply_array_attenuation(self, target: int) -> None:

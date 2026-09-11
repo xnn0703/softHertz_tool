@@ -31,6 +31,7 @@ ADDR_RX_ENABLE = 0x91
 ADDR_RX_POLARIZATION = 0x93
 ADDR_RX_PHASE_CAL = 0x97
 ADDR_RX_STATUS_QUERY = 0x9C
+ADDR_RX_ALIGNMENT_QUERY = 0x9E
 ADDR_RX_BEAM_QUERY = 0x9F
 
 CONFIG_ECHO_ADDRS = {
@@ -88,6 +89,7 @@ ADDR_NAMES = {
     ADDR_STATUS_QUERY: "TX状态查询",
     ADDR_TX_BEAM_QUERY: "TX波束参数查询",
     ADDR_RX_STATUS_QUERY: "RX状态查询",
+    ADDR_RX_ALIGNMENT_QUERY: "RX校准结果查询",
     ADDR_RX_BEAM_QUERY: "RX波束参数查询",
 }
 
@@ -411,6 +413,39 @@ def build_query_frames(
     if variant.is_tx:
         return build_status_query_frame(device_id), build_tx_beam_query_frame(device_id)
     return build_rx_status_query_frame(device_id), build_rx_beam_query_frame(device_id)
+
+
+def build_rx_alignment_query_frame(device_id: int) -> bytes:
+    """构建 AFDR1024 无载荷校准查询；TX 格式尚未确认。"""
+    return build_frame(device_id, ADDR_RX_ALIGNMENT_QUERY)
+
+
+def parse_rx_alignment_response(payload: bytes) -> Tuple[Optional[dict[str, Any]], str]:
+    """解析 UART2_ReturnAlignData 的十个单字节字段（不含命令）。
+
+    无多字节端序；温度偏移编码加 80，其余校准值保留原始码，不推算 dB/角度。
+    完整帧长度与覆盖此前全部字节的低八位累加校验由 parse_response 验证。
+    """
+    if len(payload) != 10:
+        return None, "RX校准结果响应长度应为10字节"
+    return {
+        "align_link_id": payload[0],
+        "align_temp_offset": payload[1] - 80,
+        "align_init_att": payload[2],
+        "align_zcal_en": payload[3],
+        "align_ofst_vl": payload[4],
+        "align_ofst_hl": payload[5],
+        "align_ofst_vr": payload[6],
+        "align_ofst_hr": payload[7],
+        "align_att_l": payload[8],
+        "align_att_r": payload[9],
+    }, "OK"
+
+
+def build_rx_alignment_response_frame(device_id: int) -> bytes:
+    """提供模拟器默认校准数据：温度偏移0、初衰码7、ZcalEn=1，其余码0。"""
+    payload = bytes([device_id & 0x7F, 80, 7, 1, 0, 0, 0, 0, 0, 0])
+    return build_frame(device_id, ADDR_RX_ALIGNMENT_QUERY, payload)
 
 
 def _code_to_deg(code: int) -> float:

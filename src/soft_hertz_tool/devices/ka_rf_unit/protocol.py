@@ -43,6 +43,8 @@ CMD_GET_INTERNAL_STATUS = 0x45
 RES_INTERNAL_STATUS = 0xC5
 CMD_SET_ARRAY_ATT = 0x46
 CMD_GET_ARRAY_ATT = 0x47
+CMD_SET_CONV_ATT_PERSIST = 0x48
+RES_CONV_ATT_PERSIST = 0xC8
 RES_ARRAY_ATT = 0xC7
 ARRAY_ATT_FIELDS = ("result", "snapshot_version", "bf_valid_mask", "tx_bf", "rx_bf",
                     "attenuation_sent_valid_mask", "tx_common", "tx_branch", "rx_common", "rx_branch")
@@ -148,6 +150,7 @@ CMD_NAMES = {
     CMD_GET_INTERNAL_STATUS: "INTERNAL_GET_STATUS",
     CMD_SET_ARRAY_ATT: "INTERNAL_SET_ARRAY_ATT",
     CMD_GET_ARRAY_ATT: "INTERNAL_GET_ARRAY_ATT",
+    CMD_SET_CONV_ATT_PERSIST: "SET_CONV_ATT_PERSIST",
 }
 CMD_NAMES.update({cmd | 0x80: name + "_RESULT" for cmd, name in tuple(CMD_NAMES.items()) if cmd != CMD_STATUS_REPORT})
 
@@ -476,7 +479,7 @@ def decode_payload(command: int, payload: bytes) -> Dict[str, Any]:
         values["name"] = "OK"
         return values
     if command in (RES_SET_CONV_FREQ, RES_SET_CONV_ATT, RES_SET_TX_EN, RES_SET_RX_EN,
-                   RES_SET_BEAM, RES_SET_EXT_REF, RES_SET_CONV_FREQ_FREE, RES_SET_REPORT_HZ) or 0xC0 <= command <= 0xC7:
+                   RES_SET_BEAM, RES_SET_EXT_REF, RES_SET_CONV_FREQ_FREE, RES_SET_REPORT_HZ) or 0xC0 <= command <= 0xC8:
         if len(payload) != 1:
             raise ValueError(f"0x{command:02X} 响应载荷长度应为 1，实际 {len(payload)}")
         result = payload[0]
@@ -495,11 +498,13 @@ def validate_internal_payload(command: int, payload: bytes) -> int:
     """验证内部请求长度和字段；只验证选中阵面的角度，返回正式 result。"""
     lengths = {CMD_SET_PA: 1, CMD_SET_TX_IF: 1, CMD_SET_RX_IF: 1,
                CMD_SET_ARRAY_MASK: 5, CMD_SET_BEAM_ANGLES: 9, CMD_GET_INTERNAL_STATUS: 0,
-               CMD_SET_ARRAY_ATT: 5, CMD_GET_ARRAY_ATT: 0}
+               CMD_SET_ARRAY_ATT: 5, CMD_GET_ARRAY_ATT: 0, CMD_SET_CONV_ATT_PERSIST: 4}
     if command not in lengths:
         return RESULT_UNSUPPORTED
     if len(payload) != lengths[command]:
         return RESULT_BAD_LENGTH
+    if command == CMD_SET_CONV_ATT_PERSIST:
+        return RESULT_OK if all(conv_att_valid(be16_read(payload, offset)) for offset in (0, 2)) else RESULT_OUT_OF_RANGE
     if command in (CMD_GET_INTERNAL_STATUS, CMD_GET_ARRAY_ATT):
         return RESULT_OK
     if command <= CMD_SET_RX_IF:
@@ -669,6 +674,15 @@ def build_set_conv_att(rx_att_db: float, tx_att_db: float) -> bytes:
         raise ValueError(f"TX 衰减应为 0~31.5 dB 步进 0.5，实际 {tx_att_db}")
     payload = be16_write(rx_x10) + be16_write(tx_x10)
     return encode_frame(CMD_SET_CONV_ATT, payload)
+
+
+def build_set_conv_att_persist(rx_att_db: float, tx_att_db: float) -> bytes:
+    """构建0x48双侧变频衰减保存请求；0..31.5 dB、0.5步进，非法值抛ValueError。"""
+    values = (rx_att_db, tx_att_db)
+    if any(not 0 <= value <= 31.5 or value * 2 != int(value * 2) for value in values):
+        raise ValueError("变频衰减应为0..31.5 dB，步进0.5")
+    payload = be16_write(int(rx_att_db * 10)) + be16_write(int(tx_att_db * 10))
+    return encode_frame(CMD_SET_CONV_ATT_PERSIST, payload)
 
 
 def build_set_tx_en(enabled: bool) -> bytes:
