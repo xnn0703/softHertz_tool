@@ -9,12 +9,12 @@ from soft_hertz_tool.devices.ka_rf_unit.stream import FrameStreamParser
 
 
 @pytest.mark.parametrize("frame, expected", [
-    (p.build_internal_switch(p.CMD_SET_PA, True), "50 53 41 01 40 01 01 56 1d"),
-    (p.build_array_mask(3, 1, 128, 255, 255), "50 53 41 01 43 05 03 01 80 ff ff 99 d1"),
-    (p.build_beam_angles(3, 30, 45, 30, 45), "50 53 41 01 44 09 03 0b b8 11 94 0b b8 11 94 b6 55"),
-    (p.build_internal_status_query(), "50 53 41 01 45 00 58 45"),
-    (p.build_array_attenuation(3, 8, 7.5, 4.5, 2.5), "50 53 41 01 46 05 03 10 0f 09 05 6d 3c"),
-    (p.build_array_attenuation_query(), "50 53 41 01 47 00 3e 27"),
+    (p.build_internal_switch(p.CMD_SET_PA, True), "50 53 41 02 40 01 01 cd c1"),
+    (p.build_array_mask(3, 1, 128, 255, 255), "50 53 41 02 43 05 03 01 80 ff ff 51 a4"),
+    (p.build_beam_angles(3, 30, 45, 30, 45), "50 53 41 02 44 09 03 0b b8 11 94 0b b8 11 94 b3 ca"),
+    (p.build_internal_status_query(), "50 53 41 02 45 00 01 15"),
+    (p.build_array_attenuation(3, 8, 7.5, 4.5, 2.5), "50 53 41 02 46 05 03 10 0f 09 05 a5 49"),
+    (p.build_array_attenuation_query(), "50 53 41 02 47 00 67 77"),
 ])
 def test_golden_and_every_split(frame, expected):
     assert frame == bytes.fromhex(expected)
@@ -24,7 +24,7 @@ def test_golden_and_every_split(frame, expected):
         assert [e.data for e in events if e.kind == "frame"] == [frame, frame]
     bad = frame[:-1] + bytes([frame[-1] ^ 1])
     assert p.parse_response(bad)[0] is None
-    assert p.parse_response(p.encode_frame(frame[4], frame[6:-2], protocol_version=2))[0] is None
+    assert p.parse_response(p.encode_frame(frame[4], frame[6:-2], protocol_version=1))[0] is None
 
 
 @pytest.mark.parametrize("cmd,data,result", [

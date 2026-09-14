@@ -84,12 +84,17 @@ class MainWindow(QMainWindow):
             self.pages.addWidget(workspace)
             self.workspaces.append(workspace)
 
-        self.settings = settings if settings is not None else create_application_settings()
+        self.settings = (
+            settings if settings is not None else create_application_settings()
+        )
         selected = load_device_model(self.settings, legacy_settings)
         index = self.model_combo.findData(selected)
         self.model_combo.setCurrentIndex(index if index >= 0 else 0)
         self.pages.setCurrentIndex(self.model_combo.currentIndex())
         self._active_index = self.model_combo.currentIndex()
+        self.frame_monitor.setVisible(
+            self.workspaces[self._active_index].show_frame_monitor
+        )
         for workspace_index, workspace in enumerate(self.workspaces):
             if workspace_index == self._active_index:
                 workspace.activate()
@@ -120,6 +125,7 @@ class MainWindow(QMainWindow):
                 return
         self.pages.setCurrentIndex(index)
         self._active_index = index
+        self.frame_monitor.setVisible(self.workspaces[index].show_frame_monitor)
         self.workspaces[index].activate()
         self.settings.setValue(DEVICE_MODEL_KEY, self.model_combo.itemData(index))
 

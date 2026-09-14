@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from soft_hertz_tool.devices.ka_rf_unit import protocol
 from soft_hertz_tool.devices.ka_rf_unit.driver import KaRfUnitDriver
+from soft_hertz_tool.devices.ka_rf_unit.ota_panel import OtaPanel
 from soft_hertz_tool.shared.ui.serial_connection import SerialConnectionWidget
 
 
@@ -64,7 +65,7 @@ class _CommandTabs(QTabWidget):
         return chrome + max(page.minimumSizeHint().height(), content, page.sizeHint().height())
 
 
-BAUD_RATES = (460800, 921600)
+BAUD_RATES = (460800,)
 
 POLAR_OPTIONS = (("LHCP(0)", protocol.POLAR_LEFT_CIRCLE), ("RHCP(1)", protocol.POLAR_RIGHT_CIRCLE))
 EXT_REF_OPTIONS = (("10 MHz", 10), ("50 MHz", 50))
@@ -77,8 +78,7 @@ STATUS_REPORT_ROWS = (
     ("pa_enable", "PA 使能"),
     ("tx_enable", "TX 阵列"),
     ("rx_enable", "RX 阵列"),
-    ("status_report_rate_hz", "上报频率(Hz)"),
-    ("unit_sw", "整机软件版本"),
+    ("firmware_version", "运行固件版本"),
     ("rx_rf_mhz", "RX RF (MHz)"),
     ("rx_lo_mhz", "RX LO (MHz)"),
     ("tx_rf_mhz", "TX RF (MHz)"),
@@ -97,7 +97,7 @@ STATUS_REPORT_ROWS = (
     ("tx_polar", "TX 极化"),
 )
 
-REPORT_TIMEOUT_S = 1.0
+REPORT_TIMEOUT_S = 3.0
 REFRESH_INTERVAL_MS = 100  # 10 Hz 业务 UI 刷新
 
 
@@ -114,7 +114,7 @@ def _polar_text(value: int) -> str:
 
 
 class KaRfUnitPanel(QFrame):
-    """KA_RF_UNIT V1 控制与 0x30 状态页面。"""
+    """KA_RF_UNIT V2 控制与 0xA0 状态页面。"""
 
     frame_signal = Signal(object)
 
@@ -146,7 +146,7 @@ class KaRfUnitPanel(QFrame):
         """组装紧凑的串口、命令、状态、扫描和日志区域。
 
         设备型号已由工作区顶部下拉框呈现，因此不重复占用标题行。命令区左列为
-        频点与常用控制，右列为波束与扫描；0x30 以三组字段/值并列显示。
+        频点与常用控制，右列为波束与扫描；0xA0 以三组字段/值并列显示。
         """
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 6, 8, 6)
@@ -181,6 +181,11 @@ class KaRfUnitPanel(QFrame):
         command_tabs.addTab(customer_page, "客户控制")
         self.internal_group = self._create_internal_group()
         command_tabs.addTab(self.internal_group, "内部功能测试")
+        # V0.3.0 OTA 客户控制器：第三个 tab，构造时不依赖 driver（用户立即可见），
+        # 串口连接就绪后再调 ``_bind_driver`` 注入真实 driver 引用。
+        self._ota_panel = OtaPanel(driver=None, parent=command_tabs)
+        command_tabs.addTab(self._ota_panel, "客户 OTA 升级")
+        self._ota_panel.busy_changed.connect(self._ota_busy_changed)
         self.internal_group.setEnabled(False)
         command_tabs.currentChanged.connect(self._resize_command_page)
         self._resize_command_page(0)
@@ -209,14 +214,14 @@ class KaRfUnitPanel(QFrame):
         self.command_tabs.updateGeometry()
 
     def _create_serial_group(self) -> QGroupBox:
-        """创建串口连接栏与上报频率指示。"""
+        """创建串口连接栏与查询响应频率指示。"""
         group = QGroupBox("串口设置")
         row = QHBoxLayout(group)
         self.connection = SerialConnectionWidget(BAUD_RATES, 460800)
         self.connection.connect_requested.connect(self._connect_device)
         self.connection.disconnect_requested.connect(self._disconnect_device)
         row.addWidget(self.connection, 1)
-        self.report_rate_label = QLabel("0x30 上报频率: -- Hz")
+        self.report_rate_label = QLabel("0xA0 查询响应频率: -- Hz")
         self.report_rate_label.setMinimumWidth(160)
         row.addWidget(self.report_rate_label)
         return group
@@ -501,7 +506,7 @@ class KaRfUnitPanel(QFrame):
         return group
 
     def _create_common_control_group(self) -> QGroupBox:
-        """创建衰减、阵列使能、外参与上报频率的三行紧凑控制区。"""
+        """创建衰减、阵列使能、外参与查询响应频率的三行紧凑控制区。"""
         group = QGroupBox("0x11 / 0x12 / 0x13 / 0x15 / 0x20 常用控制")
         grid = QGridLayout(group)
         grid.setContentsMargins(8, 8, 8, 8)
@@ -552,7 +557,7 @@ class KaRfUnitPanel(QFrame):
         rx_apply.clicked.connect(lambda: self._apply_en("RX"))
         grid.addWidget(rx_apply, 1, 5)
 
-        # 第 2 行：0x15 外参 / 0x20 主动上报频率
+        # 第 2 行：0x15 外参 / 主站本地查询频率（不下发频率配置）。
         grid.addWidget(self._field_label("外参"), 2, 0)
         self.ext_ref = QComboBox()
         for label, value in EXT_REF_OPTIONS:
@@ -563,11 +568,11 @@ class KaRfUnitPanel(QFrame):
         ext_apply.setMinimumWidth(80)
         ext_apply.clicked.connect(self._apply_ext_ref)
         grid.addWidget(ext_apply, 2, 2)
-        grid.addWidget(self._field_label("上报(Hz, 0=关)"), 2, 3)
-        self.report_hz = self._int_spin(50, 0, 200)
+        grid.addWidget(self._field_label("查询(Hz, 0=关)"), 2, 3)
+        self.report_hz = self._int_spin(1, 0, 10)
         self.report_hz.setMaximumWidth(80)
         grid.addWidget(self.report_hz, 2, 4)
-        report_apply = QPushButton("设置上报")
+        report_apply = QPushButton("设置查询")
         report_apply.setMinimumWidth(80)
         report_apply.clicked.connect(self._apply_report_hz)
         grid.addWidget(report_apply, 2, 5)
@@ -628,12 +633,12 @@ class KaRfUnitPanel(QFrame):
         return group
 
     def _create_status_group(self) -> QGroupBox:
-        """创建 0x30 状态表：字段/值 × 3 块，23 项在 8 行内规整显示。"""
-        group = QGroupBox("0x30 状态上报 (10 Hz 刷新)")
+        """创建 0xA0 状态表：字段/值 × 3 块，23 项在 8 行内规整显示。"""
+        group = QGroupBox("0x20/0xA0 查询快照（最近发送记录，非硬件回读；界面最多 10 Hz 刷新）")
         layout = QVBoxLayout(group)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(4)
-        self.status_meta = QLabel("上次上报: -- | 距离上次: --")
+        self.status_meta = QLabel("上次响应: -- | 距离上次: --")
         layout.addWidget(self.status_meta)
         rows_total = len(STATUS_REPORT_ROWS)
         status_blocks = 3
@@ -738,7 +743,7 @@ class KaRfUnitPanel(QFrame):
 
         layout.addLayout(grid)
 
-        # 单行按钮 + 进度 + 状态
+        # 按钮与进度一行，长状态独占下一行，避免运行后文字挤出右边界。
         button_row = QHBoxLayout()
         button_row.setSpacing(6)
         self.scan_start_btn = QPushButton("开始")
@@ -758,9 +763,10 @@ class KaRfUnitPanel(QFrame):
         self.scan_progress.setMaximumWidth(220)
         button_row.addWidget(self.scan_progress, 1)
         self.scan_status_label = QLabel("拍数 0/0 | 跳过 0 | θ=-- φ=--")
-        self.scan_status_label.setMinimumWidth(180)
-        button_row.addWidget(self.scan_status_label, 2)
+        self.scan_status_label.setWordWrap(True)
+        self.scan_status_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         layout.addLayout(button_row)
+        layout.addWidget(self.scan_status_label)
         return group
 
     def _on_scan_freq_source_changed(self) -> None:
@@ -848,6 +854,9 @@ class KaRfUnitPanel(QFrame):
         generation = self._connection_generation
         driver = self._driver_factory(port_name, baudrate)
         self._driver = driver
+        # V0.3.0 OTA 客户控制器：注入真实 driver 引用（页签一打开就有，按钮直到连接前禁用）。
+        if self._ota_panel is not None:
+            self._ota_panel._bind_driver(driver)
         driver.log_signal.connect(
             lambda message, current=driver, token=generation: self._on_driver_log(
                 current, token, message
@@ -883,6 +892,15 @@ class KaRfUnitPanel(QFrame):
         driver.finished.connect(lambda current=driver: self._on_driver_finished(current))
         driver.start()
 
+    @Slot(bool)
+    def _ota_busy_changed(self, busy: bool) -> None:
+        """OTA 独占时停扫描并禁用业务页；Driver 同时执行硬互斥。"""
+        for i in (0, 1):
+            self.command_tabs.widget(i).setEnabled(not busy)
+        self.internal_group.setEnabled(not busy and bool(self._driver and self._driver.running))
+        if busy and hasattr(self, "_scan_timer"):
+            self._on_scan_stop()
+
     def _is_current(self, driver: KaRfUnitDriver, generation: int) -> bool:
         """判断异步信号是否仍属于当前串口连接代际。"""
         return driver is self._driver and generation == self._connection_generation
@@ -900,7 +918,7 @@ class KaRfUnitPanel(QFrame):
             self.connection.set_connected(message)
             self._latest_status = None
             self._last_status_time = 0.0
-            self.report_rate_label.setText("0x30 上报频率: 等待数据")
+            self.report_rate_label.setText("0xA0 查询响应频率: 等待数据")
             self.report_rate_label.setStyleSheet("color:#666;")
         else:
             self.internal_group.setEnabled(False)
@@ -918,15 +936,17 @@ class KaRfUnitPanel(QFrame):
     ) -> None:
         """缓存当前连接返回的 STATUS_REPORT 字段，等待 UI 定时器刷新。"""
         if self._is_current(driver, generation):
-            self._latest_status = status
+            self._latest_status = dict(status)
+            self._latest_status['firmware_version'] = '.'.join(
+                str(status.get(k, 0)) for k in ('fw_major', 'fw_minor', 'fw_revision'))
             self._last_status_time = time.monotonic()
 
     def _on_driver_report_rate(
         self, driver: KaRfUnitDriver, generation: int, rate: float
     ) -> None:
-        """显示当前连接的 0x30 上报频率并按正常范围设色。"""
+        """显示当前连接的 0xA0 查询响应频率并按正常范围设色。"""
         if self._is_current(driver, generation):
-            self.report_rate_label.setText(f"0x30 上报频率: {rate:.1f} Hz")
+            self.report_rate_label.setText(f"0xA0 查询响应频率: {rate:.1f} Hz")
             color = "#198754" if 95.0 <= rate <= 105.0 else "#d97706"
             self.report_rate_label.setStyleSheet(f"color:{color}; font-weight:bold;")
 
@@ -948,6 +968,7 @@ class KaRfUnitPanel(QFrame):
             self.internal_status_label.setText("已断开，快照失效")
             self.array_att_status_label.setText("已断开，衰减快照失效")
             self._driver = None
+            self._ota_panel._bind_driver(None)
             self.connection.set_disconnected("串口已关闭")
             self._latest_status = None
             self._last_status_time = 0.0
@@ -980,6 +1001,9 @@ class KaRfUnitPanel(QFrame):
                 return False
             self._driver = None
             driver.deleteLater()
+        # V0.3.0 OTA：断开串口后清空 OTA panel 的 driver 引用，按钮全禁用。
+        if self._ota_panel is not None:
+            self._ota_panel._bind_driver(None)  # type: ignore[arg-type]
         return True
 
     def _active_driver(self) -> Optional[KaRfUnitDriver]:
@@ -995,7 +1019,8 @@ class KaRfUnitPanel(QFrame):
         if driver is None:
             return
         try:
-            action(driver)
+            if action(driver) is False:
+                self.log_text.appendPlainText("命令未入队：串口忙或未就绪")
         except (ValueError, UnicodeEncodeError) as exc:
             QMessageBox.warning(self, "参数错误", str(exc))
 
@@ -1320,11 +1345,11 @@ class KaRfUnitPanel(QFrame):
 
     @Slot()
     def _apply_report_hz(self) -> None:
-        """发送 0x20 主动上报频率配置。"""
+        """设置主站本地状态查询周期。"""
 
         def action(driver: KaRfUnitDriver) -> bool:
-            """在 Driver 上发送 0x20 上报频率。"""
-            return driver.set_report_hz(self.report_hz.value())
+            """只调整 Driver 本地查询频率，不下发频率配置。"""
+            return driver.set_query_hz(self.report_hz.value())
 
         self._safe_send(action)
 
@@ -1347,10 +1372,6 @@ class KaRfUnitPanel(QFrame):
             rx = "L" if lock.rx_lo_lock else "U"
             tx = "L" if lock.tx_lo_lock else "U"
             return f"0x{mask:04X} REF={ref} RX_LO={rx} TX_LO={tx}"
-        if key == "unit_sw":
-            major = (int(value) >> 8) & 0xFF
-            minor = int(value) & 0xFF
-            return f"V{major}.{minor} (0x{int(value) & 0xFFFF:04X})"
         if key in ("rx_polar", "tx_polar"):
             return _polar_text(int(value))
         if key in ("pa_enable", "tx_enable", "rx_enable"):
@@ -1360,19 +1381,22 @@ class KaRfUnitPanel(QFrame):
         return str(value)
 
     def _refresh_status_table(self) -> None:
-        """在 10 Hz 定时器中刷新状态表格，并在 1 s 内无 STATUS_REPORT 时显示超时。"""
+        """在 10 Hz 定时器中刷新状态表；3 秒无查询响应时标记缓存过期。"""
+        if self._driver and getattr(self._driver, "ota_active", False):
+            self.report_rate_label.setText("OTA 占用：普通状态查询暂停")
+            return
         if self._last_status_time:
             elapsed = time.monotonic() - self._last_status_time
             if elapsed > REPORT_TIMEOUT_S:
-                self.report_rate_label.setText("0x30 上报频率: 0.0 Hz（超时）")
+                self.report_rate_label.setText("0xA0 查询响应频率: 0.0 Hz（超时）")
                 self.report_rate_label.setStyleSheet(
                     "color:#c62828; font-weight:bold;"
                 )
             self.status_meta.setText(
-                f"上次上报: {self._last_status_time:.3f} | 距离上次: {elapsed:.3f}s"
+                f"上次响应: {self._last_status_time:.3f} | 距离上次: {elapsed:.3f}s"
             )
         else:
-            self.status_meta.setText("上次上报: -- | 距离上次: --")
+            self.status_meta.setText("上次响应: -- | 距离上次: --")
 
         status = self._latest_status
         if not status:
@@ -1405,6 +1429,9 @@ class KaRfUnitPanel(QFrame):
             self._scan_state = "PAUSED"
             self.scan_pause_btn.setText("继续")
             self._scan_update_status_label()
+        # V0.3.0 OTA 客户控制器：隐藏时强制停止 OTA 引擎，避免跨页面持续发送。
+        if self._ota_panel is not None:
+            self._ota_panel.shutdown()
         stopped = self.disconnect_device()
         if stopped:
             self._refresh_timer.stop()

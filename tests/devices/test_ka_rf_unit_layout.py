@@ -1,7 +1,38 @@
 """KA 页面高度与紧凑输入的实际 Qt 布局回归。"""
+import pytest
 from PySide6.QtWidgets import QApplication, QTabWidget
 
 from soft_hertz_tool.devices.ka_rf_unit.panel import KaRfUnitPanel
+
+
+@pytest.mark.parametrize("width", [1180, 1280, 1450])
+def test_scan_status_is_below_controls_and_fits_wrapped_text(width):
+    """运行中长状态不能与按钮抢宽，也不能在换行后被命令页裁掉。"""
+    app = QApplication.instance() or QApplication([])
+    panel = KaRfUnitPanel()
+    panel.resize(width, 1000)
+    panel.show()
+    try:
+        panel._scan_index = 999999
+        panel._scan_total = 1000000
+        panel._scan_skipped = 999999
+        panel._scan_current_theta = 90.0
+        panel._scan_current_phi = 360.0
+        panel._scan_state = "RUNNING"
+        panel._scan_update_status_label()
+        for _ in range(3):
+            app.processEvents()
+        label = panel.scan_status_label
+        button = panel.scan_stop_btn
+        assert label.mapTo(panel, label.rect().topLeft()).y() > button.mapTo(panel, button.rect().bottomLeft()).y()
+        assert label.wordWrap()
+        assert label.height() >= label.heightForWidth(label.width())
+        page = panel.command_tabs.currentWidget()
+        assert label.mapTo(page, label.rect().bottomRight()).y() < page.height()
+        assert "1000000" in label.text() and "RUNNING" in label.text()
+    finally:
+        panel.shutdown()
+        panel.close()
 
 
 def test_command_page_uses_active_height_and_compact_inputs():

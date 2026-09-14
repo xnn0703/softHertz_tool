@@ -23,7 +23,7 @@ from soft_hertz_tool.app.registry import WORKSPACE_SPECS, workspace_keys
 
 
 def test_registry_has_unique_expected_keys():
-    assert workspace_keys() == ("AFDTR", "AFD01_QS", "KA_RF_UNIT")
+    assert workspace_keys() == ("AFDTR", "AFD01_QS", "KA_RF_UNIT", "AFD01")
     assert len(set(workspace_keys())) == len(WORKSPACE_SPECS)
 
 
@@ -64,11 +64,13 @@ def test_current_device_model_takes_priority_over_legacy_setting(tmp_path):
 
 def test_main_window_switches_and_shuts_down_workspaces(tmp_path):
     app = QApplication.instance() or QApplication([])
-    settings = _ini_settings(tmp_path / f"{SETTINGS_ORGANIZATION}_{SETTINGS_APPLICATION}.ini")
+    settings = _ini_settings(
+        tmp_path / f"{SETTINGS_ORGANIZATION}_{SETTINGS_APPLICATION}.ini"
+    )
     legacy_settings = _ini_settings(tmp_path / "legacy.ini")
     window = MainWindow(settings=settings, legacy_settings=legacy_settings)
     assert window.windowTitle() == display_name_with_version()
-    assert window.pages.count() == 3
+    assert window.pages.count() == len(WORKSPACE_SPECS)
     assert not window.workspaces[1].panel._telemetry_timer.isActive()
     window.model_combo.setCurrentIndex(1)
     assert window.pages.currentIndex() == 1
@@ -104,3 +106,17 @@ def test_main_window_switches_and_shuts_down_workspaces(tmp_path):
     assert window.shutdown()
     window.deleteLater()
     app.processEvents()
+
+
+def test_workspace_monitor_visibility(tmp_path):
+    """AFD01 占用完整页面，切回其他设备恢复公共报文监视。"""
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(settings=_ini_settings(tmp_path / "monitor.ini"))
+    try:
+        window.model_combo.setCurrentIndex(window.model_combo.findData("AFD01"))
+        assert window.frame_monitor.isHidden()
+        window.model_combo.setCurrentIndex(window.model_combo.findData("KA_RF_UNIT"))
+        assert not window.frame_monitor.isHidden()
+    finally:
+        window.close()
+        app.processEvents()

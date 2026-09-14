@@ -63,7 +63,7 @@ def test_invalid_frequency_rejected_atomically(cmd, field, value):
 
 def test_free_auto_manual_and_response_stream():
     frame = p.build_set_conv_freq_free(19966, 0, 29500, 0, 1, 0)
-    assert frame.hex(' ') == '50 53 41 01 16 0a 4d fe 00 00 73 3c 00 00 01 00 cb d7'
+    assert frame.hex(' ') == '50 53 41 02 16 0a 4d fe 00 00 73 3c 00 00 01 00 04 72'
     port = Port()
     sim = KaRfUnitDeviceSimulator(port)
     for rx_lo, tx_lo in ((0, 0), (16750, 26550), (19250, 29050), (18000, 27000)):

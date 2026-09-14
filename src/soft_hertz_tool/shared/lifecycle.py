@@ -11,6 +11,9 @@ from PySide6.QtWidgets import QWidget
 class Workspace(QWidget):
     """主窗口只依赖该契约，不了解具体设备。"""
 
+    # 工作区声明报文监视是否可见；报文记录通路不受影响。
+    show_frame_monitor = True
+
     frame_signal = Signal(object)
 
     @abstractmethod

@@ -39,39 +39,39 @@ def test_builders_match_doc_samples():
     expected_frames = {
         "0x10": (
             protocol.build_set_conv_freq(19966, 18250, 29500, 28050, 1, 0),
-            "50 53 41 01 10 0A 4D FE 47 4A 73 3C 6D 92 01 00 A9 8E",
+            "50 53 41 02 10 0A 4D FE 47 4A 73 3C 6D 92 01 00 66 2B",
         ),
         "0x11": (
             protocol.build_set_conv_att(12.5, 4.5),
-            "50 53 41 01 11 04 00 7D 00 2D 96 00",
+            "50 53 41 02 11 04 00 7D 00 2D 4E 82",
         ),
         "0x12": (
             protocol.build_set_tx_en(True),
-            "50 53 41 01 12 01 01 66 B3",
+            "50 53 41 02 12 01 01 FD 6F",
         ),
         "0x13": (
             protocol.build_set_rx_en(True),
-            "50 53 41 01 13 01 01 51 83",
+            "50 53 41 02 13 01 01 ca 5f",
         ),
         "0x14": (
             protocol.build_set_beam(0x03, 314, 314, 302, 302),
-            "50 53 41 01 14 09 03 01 3A 01 3A 01 2E 01 2E A5 43",
+            "50 53 41 02 14 09 03 01 3A 01 3A 01 2E 01 2E A0 DC",
         ),
         "0x15": (
             protocol.build_set_ext_ref(10),
-            "50 53 41 01 15 02 00 0A 25 66",
+            "50 53 41 02 15 02 00 0A CB B4",
         ),
         "0x15_50": (
             protocol.build_set_ext_ref(50),
-            "50 53 41 01 15 02 00 32 92 3D",
+            "50 53 41 02 15 02 00 32 7C EF",
         ),
         "0x20": (
-            protocol.build_set_report_hz(50),
-            "50 53 41 01 20 02 00 32 02 91",
+            protocol.build_status_query(),
+            "50 53 41 02 20 00 f5 ca",
         ),
     }
     for name, (frame, sample) in expected_frames.items():
-        assert frame.hex(" ").upper() == sample, name
+        assert frame == bytes.fromhex(sample), name
 
 
 def test_validators_enforce_protocol_ranges():
@@ -115,8 +115,7 @@ def test_status_report_decode_full_payload():
         pa_enable=True,
         tx_enable=True,
         rx_enable=False,
-        status_report_rate_hz=50,
-        unit_sw=0x0100,
+        fw_major=0, fw_minor=3, fw_revision=0,
         rx_rf_mhz=19966,
         rx_lo_mhz=19250,
         tx_rf_mhz=29500,
@@ -137,13 +136,13 @@ def test_status_report_decode_full_payload():
     parsed, message = protocol.parse_response(status)
     assert message == "OK"
     assert parsed is not None
-    assert parsed["command"] == protocol.CMD_STATUS_REPORT
+    assert parsed["command"] == protocol.RES_STATUS
     decoded = parsed["decoded"]
     assert decoded["uptime_ms"] == 12345
     assert decoded["conv_lock_mask"] == 0x0007
     assert decoded["conv_lock"] == protocol.LockMask(True, True, True)
     assert decoded["rx_rf_mhz"] == 19966
-    assert decoded["unit_sw"] == 0x0100
+    assert decoded["fw_minor"] == 3
     assert decoded["conv_temp_x10"] == 350
     assert decoded["tx_beam_h"] == 314
 
@@ -151,14 +150,14 @@ def test_status_report_decode_full_payload():
 @pytest.mark.parametrize("temperatures", [(-100, -1, -400), (0, 350, -250)])
 def test_status_report_temperature_wire_offsets(qt_app, temperatures):
     """独立按固件载荷偏移验证温度符号、界面显示和模拟器构帧。"""
-    payload = bytearray(43)
+    payload = bytearray(46)
     temperature_keys = ("conv_temp_x10", "tx_array_temp_x10", "rx_array_temp_x10")
     beam_keys = ("tx_beam_h", "tx_beam_v", "rx_beam_h", "rx_beam_v")
-    for offset, value in zip((27, 29, 31), temperatures):
+    for offset, value in zip((30, 32, 34), temperatures):
         payload[offset:offset + 2] = value.to_bytes(2, "big", signed=True)
-    for offset, value in zip((33, 35, 37, 39), (0, 1, 2048, 4095)):
+    for offset, value in zip((36, 38, 40, 42), (0, 1, 2048, 4095)):
         payload[offset:offset + 2] = value.to_bytes(2, "big")
-    frame = protocol.encode_frame(protocol.CMD_STATUS_REPORT, bytes(payload))
+    frame = protocol.encode_frame(protocol.RES_STATUS, bytes(payload))
     parsed, message = protocol.parse_response(frame)
     assert message == "OK" and parsed is not None
     decoded = parsed["decoded"]
@@ -170,14 +169,14 @@ def test_status_report_temperature_wire_offsets(qt_app, temperatures):
             assert panel._format_status_value(key, decoded[key]) == f"{value / 10:.1f} °C"
     finally:
         panel.shutdown()
-    fields = {key: decoded[key] for key in protocol.STATUS_REPORT_FIELDS}
+    fields = {key: decoded[key] for key in protocol.STATUS_REPORT_FIELDS if key != 'result'}
     assert protocol.build_status_report(**fields) == frame
 
 
 def test_response_with_bad_payload_length_is_rejected():
-    # 错长度的 0x30 帧应被 parse_response 拒绝
-    bad_payload = b"\x00" * 42  # STATUS_REPORT 必须为 43 B
-    bad_frame = protocol.encode_frame(protocol.CMD_STATUS_REPORT, bad_payload)
+    # 错长度的 0xA0 帧应被 parse_response 拒绝
+    bad_payload = b"\x00" * 42  # STATUS_REPORT 必须为 46 B
+    bad_frame = protocol.encode_frame(protocol.RES_STATUS, bad_payload)
     parsed, message = protocol.parse_response(bad_frame)
     assert parsed is None
     assert "载荷长度" in message
@@ -207,7 +206,7 @@ def test_describe_summarizes_status_and_results():
     parsed, _ = protocol.parse_response(
         protocol.build_status_report(
             uptime_ms=1, conv_lock_mask=0x0002, pa_enable=False, tx_enable=False, rx_enable=False,
-            status_report_rate_hz=0, unit_sw=0,
+            fw_major=0, fw_minor=3, fw_revision=0,
             rx_rf_mhz=19966, rx_lo_mhz=19250, tx_rf_mhz=29500, tx_lo_mhz=0,
             rx_conv_att_x10=0, tx_conv_att_x10=0, ext_ref_mhz=10,
             conv_temp_x10=0, tx_array_temp_x10=0, rx_array_temp_x10=0,
@@ -217,7 +216,7 @@ def test_describe_summarizes_status_and_results():
     )
     assert parsed is not None
     text = protocol.describe(parsed, "OK")
-    assert "0x30" in text and "RX_LO=L" in text
+    assert "0xA0" in text and "RX_LO=L" in text
 
     parsed, _ = protocol.parse_response(protocol.encode_frame(protocol.RES_SET_TX_EN, b"\x00"))
     assert parsed is not None
@@ -307,7 +306,7 @@ def test_driver_emits_status_signal_for_status_report(qt_app):
 
     status = protocol.build_status_report(
         uptime_ms=7, conv_lock_mask=0x0001, pa_enable=False, tx_enable=False, rx_enable=True,
-        status_report_rate_hz=10, unit_sw=0x0100,
+        fw_major=0, fw_minor=3, fw_revision=0,
         rx_rf_mhz=19966, rx_lo_mhz=19250, tx_rf_mhz=29500, tx_lo_mhz=28050,
         rx_conv_att_x10=0, tx_conv_att_x10=0, ext_ref_mhz=10,
         conv_temp_x10=0, tx_array_temp_x10=0, rx_array_temp_x10=0,
@@ -360,7 +359,7 @@ def test_driver_queue_frame_uses_send_bytes(qt_app):
     # 直接调 _queue_frame 跳过 send_bytes 的 running 检查
     spy = _SpyDriver("spy://port", 460800)
     spy._queue_frame(protocol.build_set_tx_en(False))
-    spy._queue_frame(protocol.build_set_report_hz(10))
+    spy._queue_frame(protocol.build_status_query())
     assert len(spy._sent) == 2
 
 
@@ -418,7 +417,6 @@ class _FakePort:
 def test_simulator_acknowledges_valid_commands_and_rejects_invalid():
     fake = _FakePort()
     sim = KaRfUnitDeviceSimulator(fake)
-    sim.report_hz = 0  # 关闭主动上报，便于断言
 
     # 0x10 合法
     sim.process_input(protocol.build_set_conv_freq(19966, 18250, 29500, 28050, 0, 0))
@@ -431,7 +429,7 @@ def test_simulator_acknowledges_valid_commands_and_rejects_invalid():
     # 0x15 外参
     sim.process_input(protocol.build_set_ext_ref(10))
     # 0x20 上报频率
-    sim.process_input(protocol.build_set_report_hz(50))
+    sim.process_input(protocol.build_status_query())
     # 0x13 RX
     sim.process_input(protocol.build_set_rx_en(True))
 
@@ -446,7 +444,7 @@ def test_simulator_acknowledges_valid_commands_and_rejects_invalid():
     responses = [frame for frame in fake._written]
     commands = [frame[4] for frame in responses]
     assert commands[-1] == protocol.RES_SET_RX_EN
-    assert all(frame[-3] == protocol.RESULT_OK for frame in responses)
+    assert all(frame[6] == protocol.RESULT_OK for frame in responses)
 
     # 非法 0x11 应返回 OUT_OF_RANGE（手动构造一个无效衰减帧，绕过构帧器校验）
     fake._written.clear()
@@ -462,19 +460,19 @@ def test_simulator_emits_status_report_when_running(qt_app):
 
     fake = _FakePort()
     sim = KaRfUnitDeviceSimulator(fake)
-    sim.report_hz = 200
     thread = threading.Thread(target=sim.run, kwargs={"duration": 0.1}, daemon=True)
     thread.start()
     thread.join(timeout=0.5)
     sim.stop()
     thread.join(timeout=0.2)
-    assert fake._written, "模拟器在 200 Hz 下应至少发出一帧 STATUS_REPORT"
+    assert not fake._written, "V2 无自主上报"
+    sim.process_input(protocol.build_status_query())
     status_frame = fake._written[-1]
     parsed, message = protocol.parse_response(status_frame)
     assert message == "OK"
     assert parsed is not None
-    assert parsed["command"] == protocol.CMD_STATUS_REPORT
-    assert parsed["decoded"]["status_report_rate_hz"] == 200
+    assert parsed["command"] == protocol.RES_STATUS
+    assert parsed["decoded"]["fw_minor"] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -761,7 +759,7 @@ def test_scan_target_mask_and_freq_source(qt_app):
 def test_scan_rejects_stale_status_frequency(qt_app):
     panel = KaRfUnitPanel()
     panel._latest_status = {"tx_rf_mhz": 29500, "rx_rf_mhz": 19966}
-    panel._last_status_time = time.monotonic() - 1.1
+    panel._last_status_time = time.monotonic() - 3.1
     assert "超时" in panel._scan_resolve_freq(protocol.BEAM_TARGET_ALL)[2]
 
 
@@ -788,6 +786,9 @@ def test_scan_requires_target_and_driver(qt_app):
 
 
 class _StubScanDriver(QObject):
+    def stop_ota(self):
+        return True
+
     """最小 Driver 替身：仅暴露 set_beam 与 send_bytes 的状态。"""
 
     log_signal = Signal(str)

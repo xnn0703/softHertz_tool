@@ -1,9 +1,9 @@
 """KA_RF_UNIT 串口协议编解码（不依赖 Qt 或 pyserial）。
 
-帧格式（参见 ``Ka波段射频单元控制接口协议-20260803``）：
+帧格式（设备侧 ``doc/customer_protocol.md``，客户协议 V2 / App 0.3.0）：
 
-* 物理层：RS422、8N1、无流控；默认 460800，可配 921600。
-* 帧头 ``50 53 41``（ASCII ``PSA``） + 协议版本（当前 ``0x01``）+ 命令字 +
+* 物理层：RS485、8N1、无流控；460800。
+* 帧头 ``50 53 41``（ASCII ``PSA``） + 协议版本（当前 ``0x02``）+ 命令字 +
   载荷长度 + 载荷 + CRC-16/CCITT-FALSE。
 * 字节序：大端（网络字节序）。
 * CRC 计算范围：帧头开始到 payload 末；末端 CRC 字段不参与计算。
@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import math
 import struct
+import zlib
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
 
 FRAME_MAGIC = b"PSA"  # 50 53 41
-PROTOCOL_VERSION = 0x01
+PROTOCOL_VERSION = 0x02
 FRAME_HEADER_SIZE = 6
 FRAME_CRC_SIZE = 2
 MAX_FRAME_SIZE = 256
@@ -32,8 +33,8 @@ CMD_SET_RX_EN = 0x13
 CMD_SET_BEAM = 0x14
 CMD_SET_EXT_REF = 0x15
 CMD_SET_CONV_FREQ_FREE = 0x16
-CMD_SET_REPORT_HZ = 0x20
-CMD_STATUS_REPORT = 0x30
+CMD_STATUS_QUERY = 0x20
+RES_STATUS = 0xA0
 CMD_SET_PA = 0x40
 CMD_SET_TX_IF = 0x41
 CMD_SET_RX_IF = 0x42
@@ -62,8 +63,25 @@ RES_SET_RX_EN = 0x93
 RES_SET_BEAM = 0x94
 RES_SET_EXT_REF = 0x95
 RES_SET_CONV_FREQ_FREE = 0x96
-RES_SET_REPORT_HZ = 0xA0
-RES_STATUS_REPORT = 0xB0
+
+# OTA 命令字（V0.3.0；响应 = 请求 | 0x80）。
+CMD_OTA_BEGIN = 0x21
+CMD_OTA_ABORT = 0x23
+CMD_OTA_STATUS = 0x24
+RES_OTA_BEGIN = CMD_OTA_BEGIN | 0x80  # 0xA1
+RES_OTA_ABORT = CMD_OTA_ABORT | 0x80  # 0xA3
+RES_OTA_STATUS = CMD_OTA_STATUS | 0x80  # 0xA4
+
+# OTA 阶段码（设备侧 STATUS 响应汇报）。
+OTA_PHASE_IDLE = 0
+OTA_PHASE_RECEIVING = 1
+OTA_PHASE_VERIFYING = 2
+OTA_PHASE_COMMITTING = 3
+
+# App 启动健康状态。
+OTA_BOOT_PENDING = 0
+OTA_BOOT_STABLE = 1
+OTA_BOOT_GRACEFUL_REBOOT = 2
 
 # 结果码。
 RESULT_OK = 0x00
@@ -72,6 +90,22 @@ RESULT_BAD_LENGTH = 0x02
 RESULT_OUT_OF_RANGE = 0x03
 RESULT_UNSUPPORTED = 0x04
 RESULT_PERSISTENCE_FAILED = 0x05
+RESULT_BUSY = 0x06
+RESULT_INVALID_STATE = 0x07
+RESULT_CANDIDATE_EXISTS = 0x08
+RESULT_IMAGE_MISMATCH = 0x09
+RESULT_VERIFY_FAILED = 0x0A
+RESULT_IO_FAILED = 0x0B
+RESULT_UNAVAILABLE = 0x0C
+
+# OTA 边界常量。
+OTA_FILENAME_MAX = 63
+OTA_APP_MAX_SIZE = 0xC0000  # 786432 bytes = 768 KiB
+
+# YMODEM 块大小（设备侧 ymodem_cfg 支持 SOH 128 / STX 1024 双包头）。
+YMODEM_BLOCK_MIN = 128
+YMODEM_BLOCK_MAX = 1024
+YMODEM_MAX_RETRANSMIT = 10
 
 # 0x14 目标掩码。
 BEAM_TARGET_TX = 0x01
@@ -99,21 +133,21 @@ RX_RF_MAX_MHZ = 21200
 TX_RF_MIN_MHZ = 27500
 TX_RF_MAX_MHZ = 31000
 
-# 0x30 STATUS_REPORT 固定 payload 长度。
-STATUS_REPORT_PAYLOAD_LEN = 43
-# STATUS_REPORT payload 字段及大端格式串。
-# payload[27:33] 为三路 int16 温度（0.1°C），其后四路波束为 uint16。
-_STATUS_REPORT_FORMAT = ">IHBBBH" + "H" * 8 + "hhh" + "HHHHBB"
+# V2 0xA0：result + 45 字节缓存快照，温度位于 payload[30:36]。
+STATUS_REPORT_PAYLOAD_LEN = 46
+_STATUS_REPORT_FORMAT = ">BIHBBB" + "H" * 10 + "hhhHHHHBB"
 
 # 字段名（用于 STATUS_REPORT 解码）。
 STATUS_REPORT_FIELDS = (
+    "result",
     "uptime_ms",
     "conv_lock_mask",
     "pa_enable",
     "tx_enable",
     "rx_enable",
-    "status_report_rate_hz",
-    "unit_sw",
+    "fw_major",
+    "fw_minor",
+    "fw_revision",
     "rx_rf_mhz",
     "rx_lo_mhz",
     "tx_rf_mhz",
@@ -140,8 +174,7 @@ CMD_NAMES = {
     CMD_SET_BEAM: "SET_BEAM",
     CMD_SET_EXT_REF: "SET_EXT_REF",
     CMD_SET_CONV_FREQ_FREE: "SET_CONV_FREQ_FREE",
-    CMD_SET_REPORT_HZ: "SET_REPORT_HZ",
-    CMD_STATUS_REPORT: "STATUS_REPORT",
+    CMD_STATUS_QUERY: "STATUS_QUERY",
     CMD_SET_PA: "INTERNAL_SET_PA",
     CMD_SET_TX_IF: "INTERNAL_SET_TX_IF",
     CMD_SET_RX_IF: "INTERNAL_SET_RX_IF",
@@ -152,7 +185,14 @@ CMD_NAMES = {
     CMD_GET_ARRAY_ATT: "INTERNAL_GET_ARRAY_ATT",
     CMD_SET_CONV_ATT_PERSIST: "SET_CONV_ATT_PERSIST",
 }
-CMD_NAMES.update({cmd | 0x80: name + "_RESULT" for cmd, name in tuple(CMD_NAMES.items()) if cmd != CMD_STATUS_REPORT})
+CMD_NAMES.update({cmd | 0x80: name + "_RESULT" for cmd, name in tuple(CMD_NAMES.items())})
+# OTA 命令命名（不参与 _RESULT 后缀派生，因响应命令字独立注册）。
+CMD_NAMES[CMD_OTA_BEGIN] = "OTA_BEGIN"
+CMD_NAMES[CMD_OTA_ABORT] = "OTA_ABORT"
+CMD_NAMES[CMD_OTA_STATUS] = "OTA_STATUS"
+CMD_NAMES[RES_OTA_BEGIN] = "OTA_BEGIN_RESP"
+CMD_NAMES[RES_OTA_ABORT] = "OTA_ABORT_RESP"
+CMD_NAMES[RES_OTA_STATUS] = "OTA_STATUS_RESP"
 
 RESULT_NAMES = {
     RESULT_OK: "OK",
@@ -161,7 +201,26 @@ RESULT_NAMES = {
     RESULT_OUT_OF_RANGE: "OUT_OF_RANGE",
     RESULT_UNSUPPORTED: "UNSUPPORTED",
     RESULT_PERSISTENCE_FAILED: "PERSISTENCE_FAILED",
+    RESULT_BUSY: "BUSY",
+    RESULT_INVALID_STATE: "INVALID_STATE",
+    RESULT_CANDIDATE_EXISTS: "CANDIDATE_EXISTS",
+    RESULT_IMAGE_MISMATCH: "IMAGE_MISMATCH",
+    RESULT_VERIFY_FAILED: "VERIFY_FAILED",
+    RESULT_IO_FAILED: "IO_FAILED",
+    RESULT_UNAVAILABLE: "UNAVAILABLE",
 }
+
+RESULT_MESSAGES = {
+    0: "请求成功（不代表物理执行或安装完成）", 1: "协议版本错误，需要 V2 固件",
+    2: "载荷长度错误", 3: "参数超范围", 4: "设备或文件类型不支持", 5: "持久化失败",
+    6: "设备资源忙", 7: "当前阶段不允许", 8: "已存在候选，请先查询处理",
+    9: "镜像名称或大小不匹配", 10: "镜像校验失败", 11: "存储读写失败", 12: "服务尚未就绪",
+}
+
+
+def result_text(result: int) -> str:
+    """保留线上结果名，同时给操作员可读中文原因。"""
+    return f"{RESULT_NAMES.get(result, str(result))}（{RESULT_MESSAGES.get(result, '未知结果')}）"
 
 
 @dataclass(frozen=True)
@@ -202,6 +261,9 @@ def crc16_ccitt_false(data: bytes) -> int:
     算法参数：``init=0xFFFF``、``refin/refout=false``、``xorout=0x0000``、
     多项式 ``0x1021``。参考向量：``ASCII "123456789" -> 0x29B1``。
 
+    用途：KA_RF_UNIT 协议帧层（含 OTA BEGIN/ABORT/STATUS）。
+    注意：YMODEM 块层 CRC16 使用 ``crc16_ccitt_ymodem``，初始值为 ``0x0000``。
+
     Args:
         data: 待校验字节。
 
@@ -215,6 +277,47 @@ def crc16_ccitt_false(data: bytes) -> int:
         for _ in range(8):
             crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
     return crc
+
+
+def crc16_ccitt_ymodem(data: bytes) -> int:
+    """计算 CRC-16/CCITT（YMODEM 用）。
+
+    算法参数：``init=0x0000``、``refin/refout=false``、``xorout=0x0000``、
+    多项式 ``0x1021``。与协议帧层 ``crc16_ccitt_false`` (``init=0xFFFF``) 不同；
+    YMODEM 协议族约定初始值为 ``0x0000``。参考向量：``ASCII "123456789" -> 0x31C3``。
+
+    用途：YMODEM block0 与数据块（SOH 128B / STX 1024B payload）末尾 2 字节 CRC16_BE。
+
+    Args:
+        data: 待校验字节。
+
+    Returns:
+        16 位 CRC 值。
+    """
+
+    crc = 0x0000
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+
+def crc32_iso_hdlc(data: bytes) -> int:
+    """计算 CRC-32/ISO-HDLC（标准 zlib/PNG/Ethernet）。
+
+    等价 ``zlib.crc32(data) & 0xFFFFFFFF``。
+    参考向量：``ASCII "123456789" -> 0xCBF43926``。
+    用途：本地诊断及测试参考；V2 无 COMMIT 或预期 CRC32 请求。
+
+    Args:
+        data: 完整 .bin 有效字节。
+
+    Returns:
+        32 位 CRC 值。
+    """
+
+    return zlib.crc32(data) & 0xFFFFFFFF
 
 
 def be16_read(data: bytes, offset: int = 0) -> int:
@@ -449,13 +552,18 @@ def decode_payload(command: int, payload: bytes) -> Dict[str, Any]:
         ValueError: 固定载荷长度不匹配或结果码非法。
     """
 
-    if command == CMD_STATUS_REPORT:
+    if command == RES_STATUS:
+        if len(payload) == 1 and payload[0] in RESULT_NAMES and payload[0] != RESULT_OK:
+            return {"result": payload[0], "name": RESULT_NAMES[payload[0]]}
         if len(payload) != STATUS_REPORT_PAYLOAD_LEN:
             raise ValueError(
                 f"0x{command:02X} 载荷长度应为 {STATUS_REPORT_PAYLOAD_LEN}，实际 {len(payload)}"
             )
         values = struct.unpack(_STATUS_REPORT_FORMAT, payload)
         decoded = dict(zip(STATUS_REPORT_FIELDS, values))
+        if decoded["result"] != RESULT_OK:
+            raise ValueError("状态查询失败响应只能有一个结果字节")
+        decoded["name"] = "OK"
         decoded["conv_lock"] = decode_lock_mask(decoded["conv_lock_mask"])
         return decoded
 
@@ -479,7 +587,7 @@ def decode_payload(command: int, payload: bytes) -> Dict[str, Any]:
         values["name"] = "OK"
         return values
     if command in (RES_SET_CONV_FREQ, RES_SET_CONV_ATT, RES_SET_TX_EN, RES_SET_RX_EN,
-                   RES_SET_BEAM, RES_SET_EXT_REF, RES_SET_CONV_FREQ_FREE, RES_SET_REPORT_HZ) or 0xC0 <= command <= 0xC8:
+                   RES_SET_BEAM, RES_SET_EXT_REF, RES_SET_CONV_FREQ_FREE) or 0xC0 <= command <= 0xC8:
         if len(payload) != 1:
             raise ValueError(f"0x{command:02X} 响应载荷长度应为 1，实际 {len(payload)}")
         result = payload[0]
@@ -489,6 +597,16 @@ def decode_payload(command: int, payload: bytes) -> Dict[str, Any]:
             raise ValueError("内部状态成功响应必须包含 13 字节快照")
         if command == RES_ARRAY_ATT and result == RESULT_OK:
             raise ValueError("阵列衰减成功响应必须包含 10 字节快照")
+        return {"result": result, "name": RESULT_NAMES[result]}
+
+    if command == RES_OTA_STATUS:
+        return decode_ota_status_response(payload)
+    if command in (RES_OTA_BEGIN, RES_OTA_ABORT):
+        if len(payload) != 1:
+            raise ValueError(f"0x{command:02X} 响应载荷长度应为 1，实际 {len(payload)}")
+        result = payload[0]
+        if result not in RESULT_NAMES:
+            raise ValueError(f"非法结果码 0x{result:02X}")
         return {"result": result, "name": RESULT_NAMES[result]}
 
     return {"hex": payload.hex(" ").upper()}
@@ -868,22 +986,9 @@ def build_set_ext_ref(ref_mhz: int) -> bytes:
     return encode_frame(CMD_SET_EXT_REF, be16_write(ref_mhz))
 
 
-def build_set_report_hz(rate_hz: int) -> bytes:
-    """构建 ``0x20 SET_REPORT_HZ`` 帧。
-
-    Args:
-        rate_hz: 主动上报频率，0~200 Hz；0 表示关闭。
-
-    Returns:
-        完整 ``0x20`` 请求帧。
-
-    Raises:
-        ValueError: 频率越界。
-    """
-
-    if not 0 <= rate_hz <= 200:
-        raise ValueError(f"上报频率应在 0~200 Hz，实际 {rate_hz}")
-    return encode_frame(CMD_SET_REPORT_HZ, be16_write(rate_hz))
+def build_status_query() -> bytes:
+    """构建 V2 0x20 空载荷状态查询。"""
+    return encode_frame(CMD_STATUS_QUERY, b"")
 
 
 def build_status_report(
@@ -893,8 +998,9 @@ def build_status_report(
     pa_enable: bool,
     tx_enable: bool,
     rx_enable: bool,
-    status_report_rate_hz: int,
-    unit_sw: int,
+    fw_major: int,
+    fw_minor: int,
+    fw_revision: int,
     rx_rf_mhz: int,
     rx_lo_mhz: int,
     tx_rf_mhz: int,
@@ -912,7 +1018,7 @@ def build_status_report(
     rx_polar: int,
     tx_polar: int,
 ) -> bytes:
-    """构造一个完整的 ``0x30 STATUS_REPORT`` 帧。
+    """构造一个完整的 ``0xA0 STATUS_REPORT`` 帧。
 
     主要供设备侧模拟器和单元测试使用；上位机不会发出该帧。
 
@@ -920,18 +1026,20 @@ def build_status_report(
         *: 各字段意义参见 :data:`STATUS_REPORT_FIELDS`。
 
     Returns:
-        完整 ``0x30`` 帧。
+        完整 ``0xA0`` 帧。
     """
 
     payload = struct.pack(
         _STATUS_REPORT_FORMAT,
+        RESULT_OK,
         uptime_ms,
         conv_lock_mask,
         1 if pa_enable else 0,
         1 if tx_enable else 0,
         1 if rx_enable else 0,
-        status_report_rate_hz,
-        unit_sw,
+        fw_major,
+        fw_minor,
+        fw_revision,
         rx_rf_mhz,
         rx_lo_mhz,
         tx_rf_mhz,
@@ -949,7 +1057,7 @@ def build_status_report(
         rx_polar & 0xFF,
         tx_polar & 0xFF,
     )
-    return encode_frame(CMD_STATUS_REPORT, payload)
+    return encode_frame(RES_STATUS, payload)
 
 
 def describe(parsed: Optional[Dict[str, Any]], message: str) -> str:
@@ -967,10 +1075,10 @@ def describe(parsed: Optional[Dict[str, Any]], message: str) -> str:
         return message
     command = parsed["command"]
     decoded = parsed["decoded"]
-    if command == CMD_STATUS_REPORT:
+    if command == RES_STATUS and "uptime_ms" in decoded:
         lock = decoded["conv_lock"]
         return (
-            f"0x30 uptime={decoded['uptime_ms']}ms "
+            f"0xA0 uptime={decoded['uptime_ms']}ms "
             f"RX_LO={'L' if lock.rx_lo_lock else 'U'}/"
             f"TX_LO={'L' if lock.tx_lo_lock else 'U'}/"
             f"REF={'V' if lock.ref_valid else 'I'} "
@@ -980,3 +1088,118 @@ def describe(parsed: Optional[Dict[str, Any]], message: str) -> str:
     if "result" in decoded:
         return f"0x{command:02X} {decoded['name']}"
     return parsed["name"]
+
+
+# ----------------------------------------------------------------------------
+# V0.3.0 OTA 客户控制器：payload 编解码 + 完整构帧器。
+#
+# 设备侧 ``doc/customer_protocol.md`` V2。命令 0x21/0x23/0x24，0x22 未定义。
+# STATUS 响应 payload 布局：
+#   result(1) + phase(1) + fw_major(2BE) + fw_minor(2BE) + fw_revision(2BE)
+#   + app_boot_state(1) + update_requested(1) + candidate_present(1) + last_result(1)
+#   + [size(4BE) + crc32(4BE) + name_len(1) + name(N) 仅当 candidate_present==1]
+# 多字节字段全部大端；filename 1..63 字节 ASCII 0x21..0x7E，无线上 NUL。
+# size 上限 OTA_APP_MAX_SIZE (768 KiB)；结果码 0x00..0x0C。
+# ----------------------------------------------------------------------------
+
+
+def _validate_ota_filename(name: str) -> bytes:
+    """校验 OTA 文件名并返回 ASCII 字节。
+
+    规则：1..63 字节、每个字节 0x21..0x7E、禁止 ``/`` 与 ``\\``。
+
+    Raises:
+        ValueError: 不满足上述任一规则。
+    """
+
+    if not isinstance(name, str):
+        raise ValueError("OTA 文件名必须是 str")
+    raw = name.encode("ascii")
+    if len(raw) == 0 or len(raw) > OTA_FILENAME_MAX:
+        raise ValueError(f"OTA 文件名长度应在 1..{OTA_FILENAME_MAX}，实际 {len(raw)}")
+    for byte in raw:
+        if byte < 0x21 or byte > 0x7E:
+            raise ValueError(f"OTA 文件名字节越界 0x{byte:02X}")
+        if byte in (0x2F, 0x5C):  # '/' '\\'
+            raise ValueError(f"OTA 文件名禁止 '/' 或 '\\\\'")
+    return raw
+
+
+def encode_ota_begin() -> bytes:
+    """V2 BEGIN 仅接受空载荷，元数据放入 YMODEM block0。"""
+    return b""
+
+
+def encode_ota_abort() -> bytes:
+    """编码 0x23 ABORT 请求 payload：空。"""
+
+    return b""
+
+
+def encode_ota_status() -> bytes:
+    """编码 0x24 STATUS 请求 payload：空。"""
+
+    return b""
+
+
+def decode_ota_status_response(payload: bytes) -> Dict[str, Any]:
+    """解码 V2 A4：12 字节基础快照，可选 size/CRC32/name；所有整数大端。"""
+    if not payload or payload[0] not in RESULT_NAMES:
+        raise ValueError("OTA STATUS 结果码无效")
+    result = payload[0]
+    if result != RESULT_OK:
+        if len(payload) != 1:
+            raise ValueError("OTA STATUS 失败响应只能含结果码")
+        return {"result": result, "name": RESULT_NAMES[result]}
+    if len(payload) < 12:
+        raise ValueError("OTA STATUS 成功响应不足 12 字节")
+    if payload[1] > 3 or payload[8] > 2 or payload[9] > 1 or payload[10] > 1:
+        raise ValueError("OTA STATUS 阶段或标志非法")
+    if payload[11] not in (0, 5, 9, 10, 11):
+        raise ValueError("OTA STATUS last_result 非法")
+    decoded = dict(zip(
+        ("result", "phase", "fw_major", "fw_minor", "fw_revision",
+         "app_boot_state", "update_requested", "candidate_present", "last_result"),
+        struct.unpack(">BBHHHBBBB", payload[:12])))
+    decoded["name"] = "OK"
+    if not decoded["candidate_present"]:
+        if len(payload) != 12:
+            raise ValueError("OTA STATUS 无候选长度必须为 12")
+    else:
+        if len(payload) < 22 or not 1 <= payload[20] <= OTA_FILENAME_MAX or len(payload) != 21 + payload[20]:
+            raise ValueError("OTA STATUS 候选字段长度错误")
+        name = payload[21:].decode("ascii")
+        _validate_ota_filename(name)
+        size, crc = struct.unpack(">II", payload[12:20])
+        if not 1 <= size <= OTA_APP_MAX_SIZE:
+            raise ValueError("OTA STATUS 候选大小越界")
+        decoded.update(size=size, crc32=crc, filename=name, name_len=payload[20])
+    return decoded
+
+
+def build_ota_begin() -> bytes:
+    """构造 V2 空 BEGIN，接受后由设备在传输完成时自动安装。"""
+    return encode_frame(CMD_OTA_BEGIN, encode_ota_begin())
+
+
+def build_ota_abort() -> bytes:
+    """构 0x23 ABORT 完整帧（带帧头、CRC）。"""
+
+    return encode_frame(CMD_OTA_ABORT, encode_ota_abort())
+
+
+def build_ota_status() -> bytes:
+    """构 0x24 STATUS 完整帧（带帧头、CRC）。"""
+
+    return encode_frame(CMD_OTA_STATUS, encode_ota_status())
+
+
+def be32_read(data: bytes, offset: int = 0) -> int:
+    """从大端字节读取 uint32。"""
+
+    return (
+        (data[offset] << 24)
+        | (data[offset + 1] << 16)
+        | (data[offset + 2] << 8)
+        | data[offset + 3]
+    )

@@ -2,8 +2,7 @@
 """KA_RF_UNIT 串口模拟器。
 
 仅供无硬件联调：复用正式 :mod:`soft_hertz_tool.devices.ka_rf_unit.protocol`
-编解码，按 ``report_hz`` 主动发送 ``0x30 STATUS_REPORT``，并按协议结果码
-应答 7 个控制命令。
+编解码，仅应答 V2 主站查询和控制命令；不模拟 OTA Flash/安装。
 """
 
 from __future__ import annotations
@@ -15,8 +14,6 @@ from soft_hertz_tool.devices.ka_rf_unit import protocol
 from soft_hertz_tool.devices.ka_rf_unit.stream import FrameStreamParser
 
 
-DEFAULT_REPORT_HZ = 50
-MIN_PERIOD_S = 0.005
 
 
 class KaRfUnitDeviceSimulator:
@@ -31,7 +28,6 @@ class KaRfUnitDeviceSimulator:
         self.serial = serial_port
         self.parser = FrameStreamParser()
         self.started = time.monotonic()
-        self.report_hz = DEFAULT_REPORT_HZ
         self.tx_enabled = False
         self.rx_enabled = True
         self.pa_enabled = False
@@ -58,11 +54,11 @@ class KaRfUnitDeviceSimulator:
         self.tx_beam_v = 0
         self.rx_beam_h = 0
         self.rx_beam_v = 0
-        self.unit_sw = 0x0100
+        self.firmware_version = (0, 3, 0)
         self.running = False
 
     def _status_payload(self) -> bytes:
-        """按当前状态生成 43 B STATUS_REPORT payload。
+        """按当前状态生成 46 B STATUS_REPORT payload。
 
         Returns:
             解码校验通过的完整 STATUS_REPAY payload 字节。
@@ -75,8 +71,9 @@ class KaRfUnitDeviceSimulator:
             pa_enable=self.pa_enabled,
             tx_enable=self.tx_enabled,
             rx_enable=self.rx_enabled,
-            status_report_rate_hz=self.report_hz,
-            unit_sw=self.unit_sw,
+            fw_major=self.firmware_version[0],
+            fw_minor=self.firmware_version[1],
+            fw_revision=self.firmware_version[2],
             rx_rf_mhz=self.rx_rf_mhz,
             rx_lo_mhz=self.rx_lo_mhz,
             tx_rf_mhz=self.tx_rf_mhz,
@@ -99,8 +96,8 @@ class KaRfUnitDeviceSimulator:
         return payload[protocol.FRAME_HEADER_SIZE:protocol.FRAME_HEADER_SIZE + length]
 
     def _write_status_frame(self) -> None:
-        """写入完整 ``0x30 STATUS_REPORT`` 帧。"""
-        self.serial.write(protocol.encode_frame(protocol.CMD_STATUS_REPORT, self._status_payload()))
+        """写入完整 ``0xA0 STATUS`` 帧。"""
+        self.serial.write(protocol.encode_frame(protocol.RES_STATUS, self._status_payload()))
 
     def _write_response(self, command: int, result: int) -> None:
         """发送 ``0x90..0xA0`` 响应帧。"""
@@ -207,20 +204,19 @@ class KaRfUnitDeviceSimulator:
         self.ext_ref_mhz = ref
         return protocol.RESULT_OK
 
-    def _apply_set_report_hz(self, payload: bytes) -> int:
-        """处理 ``0x20 SET_REPORT_HZ`` 载荷并返回结果码。"""
-        if len(payload) != 2:
-            return protocol.RESULT_BAD_LENGTH
-        rate = protocol.be16_read(payload, 0)
-        if rate > 200:
-            return protocol.RESULT_OUT_OF_RANGE
-        self.report_hz = rate
-        return protocol.RESULT_OK
 
     def process_input(self, data: bytes) -> None:
         """解析串口输入并对每个有效控制命令返回响应。"""
         for event in self.parser.feed(data):
             if event.kind != "frame" or not event.parsed:
+                raw = event.data
+                # 仿照设备：CRC 正确的已知旧版本请求回 V2 BAD_VERSION，绝不执行。
+                if (event.kind == "bad_frame" and len(raw) >= 8 and
+                        raw[:3] == protocol.FRAME_MAGIC and raw[3] != protocol.PROTOCOL_VERSION and
+                        raw[4] in protocol.CMD_NAMES and raw[4] < 0x80 and
+                        len(raw) == raw[5] + 8 and
+                        protocol.crc16_ccitt_false(raw[:-2]) == int.from_bytes(raw[-2:], "big")):
+                    self._write_response(raw[4], protocol.RESULT_BAD_VERSION)
                 continue
             command = event.parsed["command"]
             payload = event.parsed["payload"]
@@ -245,8 +241,12 @@ class KaRfUnitDeviceSimulator:
                 result = self._apply_set_beam(payload)
             elif command == protocol.CMD_SET_EXT_REF:
                 result = self._apply_set_ext_ref(payload)
-            elif command == protocol.CMD_SET_REPORT_HZ:
-                result = self._apply_set_report_hz(payload)
+            elif command == protocol.CMD_STATUS_QUERY:
+                if payload:
+                    self._write_response(command, protocol.RESULT_BAD_LENGTH)
+                else:
+                    self._write_status_frame()
+                continue
             else:
                 # 0x30 等其它命令不响应。
                 continue
@@ -303,36 +303,18 @@ class KaRfUnitDeviceSimulator:
         return protocol.RESULT_OK
 
     def run(self, duration: float = 0.0) -> None:
-        """以目标 ``report_hz`` 发送 0x30 并处理控制命令。
+        """处理 V2 请求；不自主上报。
 
         Args:
             duration: 运行时长，单位为秒；零表示持续运行至 ``stop``。
         """
         self.running = True
         end = time.monotonic() + duration if duration > 0 else None
-        if self.report_hz <= 0:
-            period = None
-        else:
-            period = 1.0 / self.report_hz
-        deadline = time.monotonic() + period if period is not None else None
-
         while self.running and (end is None or time.monotonic() < end):
             count = self.serial.in_waiting
             if count:
                 self.process_input(self.serial.read(count))
-            if deadline is None:
-                time.sleep(0.001)
-                continue
-            now = time.monotonic()
-            if now >= deadline:
-                self._write_status_frame()
-                sent_at = time.monotonic()
-                deadline += period
-                if deadline <= sent_at:
-                    missed = int((sent_at - deadline) / period) + 1
-                    deadline += missed * period
-                deadline = max(deadline, sent_at + MIN_PERIOD_S)
-            time.sleep(min(0.001, max(0.0, deadline - time.monotonic())))
+            time.sleep(0.001)
 
     def stop(self) -> None:
         """请求 ``run`` 循环在下一次条件检查时退出。"""
@@ -343,16 +325,13 @@ def main() -> None:
     """解析命令行串口参数并启动 KA_RF_UNIT 模拟器。"""
     import serial
 
-    parser = argparse.ArgumentParser(description="KA_RF_UNIT V1 serial simulator")
+    parser = argparse.ArgumentParser(description="KA_RF_UNIT V2 serial simulator")
     parser.add_argument("port", help="串口或 PTY 路径")
     parser.add_argument("--baudrate", type=int, default=460800)
-    parser.add_argument("--report-hz", type=int, default=DEFAULT_REPORT_HZ,
-                        help="STATUS_REPORT 主动上报频率，0 表示关闭")
     args = parser.parse_args()
     with serial.Serial(args.port, args.baudrate, timeout=0) as port:
-        print(f"KA_RF_UNIT simulator: {args.port} @ {args.baudrate}, report={args.report_hz} Hz")
+        print(f"KA_RF_UNIT simulator: {args.port} @ {args.baudrate}")
         sim = KaRfUnitDeviceSimulator(port)
-        sim.report_hz = args.report_hz
         try:
             sim.run()
         except KeyboardInterrupt:

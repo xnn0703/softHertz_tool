@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from soft_hertz_tool.app.spec import WorkspaceSpec
+from soft_hertz_tool.workspaces.afd01 import Afd01Workspace
 from soft_hertz_tool.workspaces import Afd01QsWorkspace, AfdtrWorkspace, KaRfUnitWorkspace
 
 
@@ -10,6 +11,7 @@ WORKSPACE_SPECS = (
     WorkspaceSpec("AFDTR", "AFDTR（三设备）", AfdtrWorkspace),
     WorkspaceSpec("AFD01_QS", "AFD01_QS", Afd01QsWorkspace),
     WorkspaceSpec("KA_RF_UNIT", "KA_RF_UNIT", KaRfUnitWorkspace),
+    WorkspaceSpec("AFD01", "AFD01", Afd01Workspace),
 )
 
 

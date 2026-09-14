@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Any, Dict, List, Optional
 
 from soft_hertz_tool.devices.ka_rf_unit.protocol import (
@@ -34,9 +35,11 @@ class StreamEvent:
 class FrameStreamParser:
     """支持分包、粘包和异常字节恢复的增量分帧器。"""
 
-    def __init__(self) -> None:
+    def __init__(self, clock=time.monotonic) -> None:
         """创建空接收缓冲区。"""
         self.buffer = bytearray()
+        self._clock = clock
+        self._last_byte = 0.0
 
     def feed(self, data: bytes) -> List[StreamEvent]:
         """接收任意字节块并产出可解析帧与恢复诊断。
@@ -47,8 +50,14 @@ class FrameStreamParser:
         Returns:
             本次可确定的帧或丢弃事件；不完整尾帧保留到下一次调用。
         """
-        self.buffer.extend(data)
         events: List[StreamEvent] = []
+        now = self._clock()
+        if self.buffer and now - self._last_byte > 0.1:
+            events.append(StreamEvent("timeout", bytes(self.buffer), message="半帧间隔超过 100 ms"))
+            self.buffer.clear()
+        if data:
+            self._last_byte = now
+        self.buffer.extend(data)
 
         while self.buffer:
             if self.buffer[:3] != FRAME_MAGIC:
@@ -87,8 +96,9 @@ class FrameStreamParser:
                 break
 
             frame = bytes(self.buffer[:total])
-            del self.buffer[:total]
             parsed, message = parse_response(frame)
+            # CRC/长度损坏可能吞入下一帧；只滑过一个字节后重新找帧头。
+            del self.buffer[:total if parsed else 1]
             events.append(
                 StreamEvent(
                     "frame" if parsed else "bad_frame",

@@ -20,8 +20,8 @@ class Port:
 def test_golden_and_stream():
     request = p.build_set_conv_att_persist(0, 10)
     reply = p.encode_frame(p.RES_CONV_ATT_PERSIST, b'\x00')
-    assert request.hex(' ') == '50 53 41 01 48 04 00 00 00 64 ed c2'
-    assert reply.hex(' ') == '50 53 41 01 c8 01 00 d4 c7'
+    assert request.hex(' ') == '50 53 41 02 48 04 00 00 00 64 35 40'
+    assert reply.hex(' ') == '50 53 41 02 c8 01 00 4f 1b'
     for frame in (request, reply):
         for cut in range(len(frame) + 1):
             parser = FrameStreamParser()
@@ -29,7 +29,7 @@ def test_golden_and_stream():
             assert [e.data for e in events if e.kind == 'frame'] == [frame]
     for result in range(6):
         assert p.parse_response(p.encode_frame(0xC8, bytes([result])))[0]['decoded']['result'] == result
-    for payload in (b'', b'\x00\x00', b'\x06'):
+    for payload in (b'', b'\x00\x00', b'\xff'):
         assert p.parse_response(p.encode_frame(0xC8, payload))[0] is None
 
 
