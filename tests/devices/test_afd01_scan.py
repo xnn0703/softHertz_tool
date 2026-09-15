@@ -154,31 +154,18 @@ def test_pause_between_targets_and_stop_inflight(panel):
     assert len(beams(frames)) == 2 and w.driver.pending is None
 
 
-@pytest.mark.parametrize(
-    "reason", ["failed", "timeout", "stale", "mode", "disconnect", "tab", "frequency"]
-)
+@pytest.mark.parametrize("reason", ["mode", "disconnect", "tab"])
 def test_abort_never_sends_next_point(panel, reason):
     w, t, frames = panel
     w._start_scan()
     w._scan_timer.stop()
     rid = w._scan_request
-    if reason == "failed":
-        report(w.driver, rid, 6)
-    elif reason == "timeout":
-        w.driver.pending["deadline"] = 0
-        w.driver.tick()
-    elif reason == "stale":
-        t[0] += 4
-        w._scan_tick()
-    elif reason == "mode":
+    if reason == "mode":
         report(w.driver, rid, 1, 0)
     elif reason == "disconnect":
         w.driver.close()
     elif reason == "tab":
         w.deactivate()
-    elif reason == "frequency":
-        w.driver.latest["arrays"][0]["frequency"] = 30000
-        w.refresh()
     assert w._scan_grid is None and not w._scan_timer.isActive()
     t[0] += 10
     w._scan_tick()
@@ -225,3 +212,103 @@ def test_fast_query_keeps_delayed_id(panel):
     qid = d._query_id
     d.tick()
     assert d._query_id == qid
+
+
+@pytest.mark.parametrize("result", [None, 3, 6, 7])
+def test_retry_current_point_and_ignore_old_result(panel, result):
+    """可恢复失败保持点位，新请求成功才推进，迟到旧结果不推进。"""
+    w, t, frames = panel
+    w._start_scan()
+    w._scan_timer.stop()
+    first = w._scan_request
+    if result is None:
+        w.driver.pending["deadline"] = 0
+        w.driver.tick()
+    else:
+        report(w.driver, first, result)
+    assert w._scan_grid is not None and w._scan_index == 0
+    t[0] += 0.99
+    w._scan_tick()
+    assert len(beams(frames)) == 1
+    t[0] += 0.02
+    report(w.driver)
+    w._scan_tick()
+    second = w._scan_request
+    assert second != first and second is not None
+    assert beams(frames)[0][3:] == beams(frames)[1][3:]
+    report(w.driver, first)
+    assert w._scan_index == 0 and w._scan_request == second
+    report(w.driver, second)
+    assert w._scan_index == 1
+
+
+@pytest.mark.parametrize("condition", ["stale", "offline", "frequency"])
+def test_transient_status_recovers(panel, condition):
+    """临时状态异常保留进度，频率变化继续使用设备当前频率。"""
+    w, t, frames = panel
+    w._start_scan()
+    w._scan_timer.stop()
+    report(w.driver, w._scan_request)
+    t[0] += 0.3
+    if condition == "stale":
+        t[0] += 3
+    elif condition == "offline":
+        w.driver.latest["arrays"][0]["flags"] = 1
+    else:
+        w.driver.latest["arrays"][0]["frequency"] = 30000
+    w._scan_tick()
+    assert w._scan_grid is not None
+    if condition != "frequency":
+        assert len(beams(frames)) == 1
+        report(w.driver)
+        w._scan_tick()
+    assert len(beams(frames)) == 2
+
+
+@pytest.mark.parametrize("result", [2, 4, 5])
+def test_permanent_result_stops(panel, result):
+    """参数、不支持和非手动错误终止重试。"""
+    w, t, frames = panel
+    w._start_scan()
+    report(w.driver, w._scan_request, result)
+    t[0] += 2
+    w._scan_tick()
+    assert w._scan_grid is None and len(beams(frames)) == 1
+
+
+def test_pause_and_stop_cancel_retries(panel):
+    """暂停期间不重发，恢复后重试当前点，停止后不再发送。"""
+    w, t, frames = panel
+    w._start_scan()
+    w._scan_timer.stop()
+    report(w.driver, w._scan_request, 3)
+    w._pause_scan()
+    t[0] += 2
+    report(w.driver)
+    w._scan_tick()
+    assert len(beams(frames)) == 1
+    w._pause_scan()
+    w._scan_tick()
+    assert len(beams(frames)) == 2
+    report(w.driver, w._scan_request, 6)
+    w._scan_stop_clicked()
+    t[0] += 2
+    w._scan_tick()
+    assert len(beams(frames)) == 2
+
+
+def test_dual_target_retry_only_failed_rx(panel):
+    """TX 成功后 RX 失败只重发 RX，整点成功才计数。"""
+    w, t, frames = panel
+    w.scan_target.setCurrentIndex(2)
+    w._start_scan()
+    w._scan_timer.stop()
+    report(w.driver, w._scan_request)
+    w._scan_tick()
+    report(w.driver, w._scan_request, 6)
+    assert w._scan_index == 0
+    t[0] += 1.01
+    w._scan_tick()
+    assert [f[3] for f in beams(frames)] == [0, 1, 1]
+    report(w.driver, w._scan_request)
+    assert w._scan_index == 1

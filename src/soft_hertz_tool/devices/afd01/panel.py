@@ -64,7 +64,6 @@ class Afd01Panel(QWidget):
         self._scan_due = 0.0
         self._scan_targets = (0,)
         self._scan_dwell = 0.2
-        self._scan_frequencies = ()
         self._scan_timer = QTimer(self)
         self._scan_timer.setInterval(25)
         self._scan_timer.timeout.connect(self._scan_tick)
@@ -353,8 +352,13 @@ class Afd01Panel(QWidget):
             self._auto_manual_pending = False
             if not d.manual:
                 self._manual()
-        if self._scan_grid is not None and not self._scan_device_ready():
-            self._stop_scan("扫描终止：模式、状态或阵列频率发生变化")
+        if self._scan_grid is not None:
+            if d.socket is None:
+                self._stop_scan("扫描停止：连接已断开")
+            elif d.fresh and not d.manual:
+                self._stop_scan("扫描停止：已退出手动模式")
+            elif d.fresh and not d.latest.get("capabilities", 0) & (1 << Op.BEAM):
+                self._stop_scan("扫描停止：固件不支持波束控制")
         scanning = self._scan_grid is not None
         self.connect_button.setText("断开" if d.socket else "连接")
         self.host.setEnabled(d.socket is None)
@@ -540,16 +544,14 @@ class Afd01Panel(QWidget):
         return group
 
     def _scan_device_ready(self) -> bool:
-        """确认手动模式、新鲜状态、目标在线和扫描开始时冻结的频率。"""
+        """确认新鲜手动状态、所选阵列在线且当前频率有效。"""
         d = self.driver
         if not d.manual or not d.latest.get("capabilities", 0) & (1 << Op.BEAM):
             return False
         arrays = d.latest.get("arrays", [])
         return len(arrays) == 2 and all(
-            arrays[t]["flags"] & 3 == 3
-            and arrays[t]["frequency"] == frequency
-            and frequency > 0
-            for t, frequency in zip(self._scan_targets, self._scan_frequencies)
+            arrays[t]["flags"] & 3 == 3 and arrays[t]["frequency"] > 0
+            for t in self._scan_targets
         )
 
     @Slot()
@@ -561,16 +563,7 @@ class Afd01Panel(QWidget):
             theta = ScanAxis.degrees(*(w.value() for w in self.scan_axes[0]), 90)
             phi = ScanAxis.degrees(*(w.value() for w in self.scan_axes[1]), 360)
             self._scan_targets = tuple(self.scan_target.currentData())
-            arrays = self.driver.latest.get("arrays", [])
-            self._scan_frequencies = (
-                tuple(arrays[t]["frequency"] for t in self._scan_targets)
-                if len(arrays) == 2
-                else ()
-            )
-            if (
-                len(self._scan_frequencies) != len(self._scan_targets)
-                or not self._scan_device_ready()
-            ):
+            if not self._scan_device_ready():
                 raise ValueError("所选阵列需在线且频率有效")
         except ValueError as exc:
             self.scan_status.setText(str(exc))
@@ -595,8 +588,11 @@ class Afd01Panel(QWidget):
         grid = self._scan_grid
         if grid is None:
             return
+        self.refresh()
+        if self._scan_grid is None or self._scan_paused:
+            return
         if not self._scan_device_ready():
-            self._stop_scan("扫描终止：设备状态失效或退出手动模式")
+            self._scan_message("等待恢复", current=True)
             return
         if (
             self._scan_paused
@@ -611,7 +607,10 @@ class Afd01Panel(QWidget):
         target = self._scan_targets[self._scan_target_index]
         try:
             self._scan_request = self.driver.control(Op.BEAM, target, theta, phi)
-        except (ValueError, OSError) as exc:
+        except OSError:
+            self._retry_scan_point()
+            return
+        except ValueError as exc:
             self._stop_scan("扫描停止：" + str(exc))
             return
         self.scan_status.setText(
@@ -627,6 +626,9 @@ class Afd01Panel(QWidget):
             or result["operation"] != Op.BEAM
         ):
             return
+        if result["result"] in (None, 3, 6, 7):
+            self._retry_scan_point()
+            return
         if result["result"] != 1:
             self._stop_scan(
                 "扫描停止：" + RESULTS.get(result["result"], "超时，执行结果未知")
@@ -641,6 +643,14 @@ class Afd01Panel(QWidget):
             self._scan_due = time.monotonic() + self._scan_dwell
         self._scan_message("已暂停" if self._scan_paused else "")
 
+    def _retry_scan_point(self) -> None:
+        """保留当前点与目标，至少一秒后重试；暂停期间由扫描节拍禁止发送。"""
+        self._scan_message(
+            "已暂停" if self._scan_paused else "等待恢复／重试当前点", current=True
+        )
+        self._scan_request = None
+        self._scan_due = time.monotonic() + 1.0
+
     @Slot()
     def _pause_scan(self) -> None:
         """暂停不取消已发送请求；继续时完成点重新停留完整间隔。"""
@@ -648,10 +658,14 @@ class Afd01Panel(QWidget):
             return
         self._scan_paused = not self._scan_paused
         if not self._scan_paused and self._scan_request is None:
-            self._scan_due = time.monotonic() + (
-                self._scan_dwell
-                if self._scan_target_index == 0 and self._scan_index > 0
-                else 0
+            self._scan_due = max(
+                self._scan_due,
+                time.monotonic()
+                + (
+                    self._scan_dwell
+                    if self._scan_target_index == 0 and self._scan_index > 0
+                    else 0
+                ),
             )
         self._scan_message(
             "暂停中，已发送请求仍会结算" if self._scan_paused else "继续扫描"
@@ -675,13 +689,18 @@ class Afd01Panel(QWidget):
         self.driver.set_scan_polling(False)
         self.refresh()
 
-    def _scan_message(self, text: str) -> None:
+    def _scan_message(self, text: str, current: bool = False) -> None:
         """在等待、暂停和结束时保留当前点角度、目标和完成进度。"""
         grid = self._scan_grid
         if grid is None:
             return
         index = self._scan_index
-        if self._scan_request is None and self._scan_target_index == 0 and index > 0:
+        if (
+            not current
+            and self._scan_request is None
+            and self._scan_target_index == 0
+            and index > 0
+        ):
             index -= 1
         theta, phi = grid.point(min(index, grid.count - 1))
         target = "+".join("TX" if t == 0 else "RX" for t in self._scan_targets)
