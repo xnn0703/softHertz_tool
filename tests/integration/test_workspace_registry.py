@@ -23,7 +23,7 @@ from soft_hertz_tool.app.registry import WORKSPACE_SPECS, workspace_keys
 
 
 def test_registry_has_unique_expected_keys():
-    assert workspace_keys() == ("AFDTR", "AFD01_QS", "KA_RF_UNIT", "AFD01")
+    assert workspace_keys() == ("AFDTR", "AFD01_QS", "KA_RF_UNIT", "AFD01", "KUR512")
     assert len(set(workspace_keys())) == len(WORKSPACE_SPECS)
 
 

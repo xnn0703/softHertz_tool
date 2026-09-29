@@ -7,6 +7,7 @@ SoftHertz Tool 是面向 SoftHertz 设备的跨平台串口调试上位机。项
 - `AFDTR`：组合 KaUDC004A、AFDT1024（1024 发射阵列）和 AFDR1024（1024 接收阵列）。
 - `AFD01_QS`：配置 AFD01_QS，接收实时状态，并配置、显示 TX/RX 有效子阵档位。
 - `KA_RF_UNIT`：配置 Ka 波段射频单元，支持客户控制、`0x20/0xA0` 主动查询状态 及独立 PA、中频 TX/RX、行列、角度波束、TA/RA 阵列衰减和内部状态查询（`0x40..0x47`）。
+- `KUR512`：配置 KuR512B（Ku 波段 512 单元接收子阵，无变频），支持 `0..100 Hz` 主动读取 `0x9C` 状态、按 ID + 日期落盘 CSV（含原始报文十六进制）以及最近 5 分钟温度/电压实时曲线。
 
 ## 名称约定
 
@@ -25,6 +26,7 @@ SoftHertz Tool 是面向 SoftHertz 设备的跨平台串口调试上位机。项
 - `AFDR1024`：1024 接收阵列。
 
 源码中的 `devices/afdtr1024` 和 `AFDTR1024*` 是两种阵列共用实现的内部名称，不应作为对外硬件型号。
+`KUR512` 是工作区名称，UI/日志/文档中的设备型号为 `KuR512`（协议原件标题为 KuR512B 无变频）。
 
 ## 当前功能
 
@@ -102,6 +104,18 @@ AFDR1024 的“查询全部状态”按 ID 依次发送 `0x9C`、`0x9F`、`0x9E`
 - 业务 UI 最多 10 Hz 刷新；超过 3 秒无响应提示状态过期，OTA 期间明确提示普通查询暂停。
 - 波束扫描保留角度/步进/频率源功能；在途请求未完成时跳过本拍，不积压迟到扫描点。OTA 启动后停止扫描并禁用普通业务页。
 - OTA 上传完成后设备自动校验、安装并复位；无 READY/COMMIT，详见下文。合同摘要见 [V2 同步说明](docs/protocols/readable-notes/ka-rf-unit-v2-20260913.md)。
+
+### KUR512 工作区
+
+面向 `KuR512B`（Ku 波段 512 单元接收子阵，无变频）。页面设计参考 `AFDR1024`，并新增主动读取与曲线。
+
+- 串口 460800 8N1；频率 10700..12750 MHz 步进 50（f0 = 12500 MHz）。
+- 命令：`0x90` 波束（含 POL 0..180 / 254=LHCP / 255=RHCP）、`0x91` 阵列使能（16 bit en_row + 12 bit 0xFFF）、`0x97` 整板相位校准（PS_Align 0..63）、`0x20` ID 更新、`0x9C` 状态查询（Rev/SYS_VCC/SYS_Temp/MCU_VER）。
+- **主动读取**：UI 输入查询频率 `0..100 Hz`（0=停，默认 1 Hz）；按子阵 ID 列表 round-robin 发送 `0x9C`，帧间隔 ≥3 ms；UI 同步显示 10 s 滑动窗口的实际达成频率。`0x9C` 响应**不包含频点信息**，因此面板不需要用户配置目标工作频率。
+- **CSV 落盘**：路径 `Documents/SoftHertz/SoftHertz_Tool/logs/kur512/<device_id>/status-YYYY-MM-DD.csv`；字段 `ts,device_id,rev,sys_vcc,sys_temp,mcu_ver,raw_hex`（`raw_hex` 为回包完整帧大写十六进制）。50 MiB 单文件轮转，按日期+ID 分子目录。
+- **实时曲线**：内置 `pyqtgraph` `PlotWidget`，温度（℃）左 Y 轴 + 电压（V）右 Y 轴，默认最近 5 分钟，可切 1/5/15 min；底层用预分配 `ChannelBuffer` 环形 ndarray（容量 30000 ≈ 5 min × 100 Hz），10 Hz 节流 `refresh()` 拉 buffer 整批 `setData(xs, ys)`。设计参考 `satellite_debug_tool.ui.GroupedChartWidget`：稳定相对时间原点、`setDownsampling(mode="peak", auto=True)`、`setClipToView(True)`、X 扩窗节流 `_X_SCROLL_STEP_SEC=1.0`。
+- 不实现 0x93 极化独立指令（POL 随 0x90 下发）与 0x9F 波束参数查询。
+- 协议要点见 [KuR512B 受控协议笔记](docs/protocols/readable-notes/KuR512B_RX_Protocol.md)；开发记录见 [docs/development/kur512b_20260929/](docs/development/kur512b_20260929/)。
 
 ### 工作区切换与报文监视
 
@@ -332,6 +346,14 @@ soft-hertz-ka-rf-sim <KaRF模拟器端口> --baudrate 460800
 模拟器仅响应 V2 状态查询及普通设置（包含持久衰减故障注入），不会自主上报。
 模拟器验证的是主机侧协议与数据流，不模拟 Flash/Boot，不代表真实设备验收。
 
+### KuR512B
+
+```bash
+soft-hertz-kur512-sim <KuR512模拟器端口> --ids 1,2,3 --baudrate 460800
+```
+
+模拟器响应配置回显与 `0x9C` 状态查询；电压与温度随子阵 ID 漂移，便于上位机区分多子阵。模拟器仅覆盖设置/回读闭环，不模拟设备运行时行为，不代表真实硬件验收。
+
 ## KA_RF_UNIT OTA 使用与真机验收边界
 
 客户接口为 RS485 460800 / 8N1 / 无流控。使用自动方向控制适配器，A/B 接板上 RS485 A/B，
@@ -470,6 +492,7 @@ CI 构建成功只说明 runner 上完成测试和打包。发布完成还必须
 | P0 | AFD01_QS 100 Hz 长稳 | 真实设备持续运行，记录丢帧率、超时恢复、CPU/内存、UI 响应和日志轮转 |
 | P1 | KA_RF_UNIT 客户控制器 OTA 上传 | 受 V0.3.0 设备侧 plan/acceptance 约束；上位机为客户设备发起者；6 类证据见 `docs/development/ka_rf_unit_ota/` |
 | P1 | KA_RF_UNIT 真实设备验收 | 在 RS422 链路上确认频点/极化/衰减/波束/外参/上报频率全链路，记录版本、串口参数、日志和结果 |
+| P1 | KuR512 真实设备验收 | 在 460800 链路上确认 0x90/0x91/0x97/0x9C 全指令，记录 100 Hz 主动读取、CSV 落盘和 5 min 曲线在真实板上的内存/CPU 表现 |
 | P1 | 补齐 QS V1.7 受控协议 | 将允许入库的受控原件加入 `docs/protocols/controlled-originals`，逐字段核对当前实现 |
 | P1 | 确认 KaUDC004A 温度换算 | 用受控协议和真实设备确认温度原始值的偏移/符号规则，补充协议向量 |
 | P1 | 增加 KaUDC004A 模拟器 | 复用正式 protocol/stream，实现主要命令的设置与查询闭环 |

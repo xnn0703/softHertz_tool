@@ -11,6 +11,7 @@ requires-python = ">=3.9"
 dependencies = [
     "PySide6>=6.5.0,<6.10",
     "pyserial>=3.5",
+    "pyqtgraph>=0.13",
 ]
 
 [project.optional-dependencies]
@@ -24,6 +25,7 @@ soft-hertz-tool = "soft_hertz_tool.__main__:main"
 soft-hertz-afdtr-sim = "soft_hertz_tool.devices.afdtr1024.simulator:main"
 soft-hertz-qs-sim = "soft_hertz_tool.devices.afd01_qs.simulator:main"
 soft-hertz-ka-rf-sim = "soft_hertz_tool.devices.ka_rf_unit.simulator:main"
+soft-hertz-kur512-sim = "soft_hertz_tool.devices.kur512.simulator:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
