@@ -1003,11 +1003,11 @@ def test_runtime_version_is_hardcoded_in_package_init():
     import soft_hertz_tool
 
     reloaded = importlib.reload(soft_hertz_tool)
-    assert reloaded.__version__ == "3.3.1"
+    assert reloaded.__version__ == "3.4.0"
 
 
 def test_identity_display_name_includes_version():
     """display_name_with_version 应拼接 ``SoftHertz Tool v<version>``。"""
     from soft_hertz_tool import identity
 
-    assert identity.display_name_with_version() == "SoftHertz Tool v3.3.1"
+    assert identity.display_name_with_version() == "SoftHertz Tool v3.4.0"
